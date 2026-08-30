@@ -1,4 +1,7 @@
 #include "server.h"
+#include "source/fh8626_platform.h"
+
+#include <math.h>
 
 #define HTTP_MAX_CLIENTS 50
 #define HTTP_MIN_BUF_SIZE 4096
@@ -1441,10 +1444,30 @@ void respond_request(http_request_t *req) {
         return;
     }
 
+    if (EQUALS(req->uri, "/api/platform") &&
+        app_config.source_type == APP_SOURCE_FH86) {
+        char platform_json[768];
+        int json_len = fh8626_platform_write_json(platform_json, sizeof(platform_json),
+            app_config.rtsp_enable, app_config.mp4_enable);
+        if (json_len < 0) {
+            send_http_error(req->clntFd, 500);
+            return;
+        }
+        respLen = sprintf(response,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json;charset=UTF-8\r\n"
+            "Connection: close\r\n"
+            "\r\n%s", platform_json);
+        send_and_close(req->clntFd, response, respLen);
+        return;
+    }
+
     if (EQUALS(req->uri, "/api/status")) {
         struct sysinfo si;
+        float temperature;
+        char memory[16], uptime[48], temp[24];
+        const char *source_name;
         sysinfo(&si);
-        char memory[16], uptime[48];
         short free = (si.freeram + si.bufferram) / 1024 / 1024;
         short total = si.totalram / 1024 / 1024;
         sprintf(memory, "%d/%dMB", total - free, total);
@@ -1454,15 +1477,24 @@ void respond_request(http_request_t *req) {
             sprintf(uptime, "%ld:%02ld:%02ld", si.uptime / 3600, (si.uptime % 3600) / 60, si.uptime % 60);
         else
             sprintf(uptime, "%ld:%02ld", si.uptime / 60, si.uptime % 60);
+
+        temperature = hal_temperature_read();
+        if (isfinite(temperature))
+            snprintf(temp, sizeof(temp), "%.1f\u00B0C", temperature);
+        else
+            snprintf(temp, sizeof(temp), "unavailable");
+        source_name = app_config.source_type == APP_SOURCE_FH86 ? "fh86" : "sdk";
+
         respLen = sprintf(response,
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: application/json;charset=UTF-8\r\n"
             "Connection: close\r\n"
             "\r\n"
             "{\"chip\":\"%s\",\"loadavg\":[%.2f,%.2f,%.2f],\"memory\":\"%s\","
-            "\"sensor\":\"%s\",\"temp\":\"%.1f\u00B0C\",\"uptime\":\"%s\"}",
+            "\"sensor\":\"%s\",\"temp\":\"%s\",\"uptime\":\"%s\","
+            "\"source\":\"%s\",\"family\":\"%s\"}",
             chip, si.loads[0] / 65536.0, si.loads[1] / 65536.0, si.loads[2] / 65536.0,
-            memory, sensor, hal_temperature_read(), uptime);
+            memory, sensor, temp, uptime, source_name, family);
         send_and_close(req->clntFd, response, respLen);
         return;
     }

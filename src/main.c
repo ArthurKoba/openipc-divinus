@@ -7,6 +7,7 @@
 #include "rtsp/rtsp_server.h"
 #include "server.h"
 #include "source/fh86_divinus.h"
+#include "source/fh8626_platform.h"
 #include "watchdog.h"
 
 #include <getopt.h>
@@ -71,9 +72,12 @@ int main(int argc, char *argv[]) {
             GIT_REV, family);
         fprintf(stderr, "Chip ID: %s\n", chip);
     } else {
+        fh8626_platform_apply_identity();
         fprintf(stderr,
             "\033[0m\033[7m Divinus (rev %s) with external FH86 source \033[0m\n",
             GIT_REV);
+        fprintf(stderr, "Chip ID: %s\n", chip);
+        fprintf(stderr, "Sensor: %s\n", sensor);
     }
 
     if (app_config_parse() != CONFIG_OK)
