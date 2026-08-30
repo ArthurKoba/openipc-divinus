@@ -344,7 +344,6 @@ enum ConfigError parse_list(
     regfree(&param_regex);
     
     if (param_result || (end_pos >= 0 && start_pos + param_match[0].rm_eo > end_pos)) {
-        HAL_DANGER("config", "Parameter '%s' not found in section '%s'\n", param_name, section);
         return CONFIG_PARAM_NOT_FOUND;
     }
 
