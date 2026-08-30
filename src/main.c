@@ -86,6 +86,8 @@ int main(int argc, char *argv[]) {
 
     if (app_config.rtsp_enable) {
         rtspHandle = rtsp_create(RTSP_MAXIMUM_CONNECTIONS, app_config.rtsp_port, 1);
+        if (!rtspHandle)
+            HAL_ERROR("rtsp", "Failed to start RTSP server!\n");
         HAL_INFO("rtsp", "Started listening for clients...\n");
         if (app_config.rtsp_enable_auth) {
             if (EMPTY(app_config.rtsp_auth_user) || EMPTY(app_config.rtsp_auth_pass))
