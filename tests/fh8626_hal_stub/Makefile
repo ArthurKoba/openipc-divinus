@@ -5,6 +5,7 @@ SRC = ../../src/hal/full/fh8626_contract.c \
       ../../src/hal/full/fh8626_stream_backend.c \
       ../../src/hal/full/fh8626_native_adapter.c \
       ../../src/hal/full/fh8626_native_runtime.c \
+      ../../src/hal/full/fh8626_provider.c \
       ../../src/hal/full/fh8626_hal.c \
       test_fh8626_hal_stub.c
 

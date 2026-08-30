@@ -57,3 +57,13 @@ copies and releases the descriptor before calling the normal Divinus video sink,
 so the RTSP path cannot retain a hardware lease.  Builds without
 `FH8626_NATIVE_STUB` contain the plumbing but do not select the platform and do
 not acquire FH8626 hardware.
+
+## Production provider gate
+
+The FH8626 platform exposes an explicit provider-status boundary. Stub mode is
+selectable only when `FH8626_NATIVE_STUB` is compiled in. Normal builds keep the
+provider at `none` and production selection remains disabled. The production
+gate reports a blocker mask for exact chip detection, device-open/ring-mmap
+setup, pipeline ownership, force-IDR, and runtime rate-control contracts. Until
+those contracts are proven, `fh8626_provider_production_ready()` is false and
+the native SDK cannot silently acquire FH8626 hardware.

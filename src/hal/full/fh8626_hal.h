@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fh8626_native_adapter.h"
+#include "fh8626_provider.h"
 #include "fh8626_native_runtime.h"
 #include "../types.h"
 
@@ -19,6 +20,7 @@ struct fh8626_stub_stats {
 };
 
 int fh8626_hal_stub_enabled(void);
+int fh8626_hal_production_ready(void);
 int fh8626_hal_stub_get_stats(struct fh8626_stub_stats *stats);
 int fh8626_sdk_start(fh8626_video_sink sink);
 int fh8626_sdk_stop(void);

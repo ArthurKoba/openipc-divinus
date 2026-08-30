@@ -174,11 +174,15 @@ static void *fh8626_stub_video_thread(void *opaque)
 
 int fh8626_hal_stub_enabled(void)
 {
-#ifdef FH8626_NATIVE_STUB
-    return 1;
-#else
-    return 0;
-#endif
+    struct fh8626_provider_status status;
+
+    return fh8626_provider_get_status(&status) == 0 &&
+        status.kind == FH8626_PROVIDER_STUB && status.selectable;
+}
+
+int fh8626_hal_production_ready(void)
+{
+    return fh8626_provider_production_ready();
 }
 
 int fh8626_sdk_start(fh8626_video_sink sink)
