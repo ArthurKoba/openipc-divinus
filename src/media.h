@@ -26,6 +26,7 @@
 
 extern rtsp_handle rtspHandle;
 
+int save_video_stream(char index, hal_vidstream *stream);
 int sdk_start(void);
 int sdk_stop(void);
 

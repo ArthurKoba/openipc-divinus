@@ -246,6 +246,9 @@ void media_stop(void) {
 }
 
 void request_idr(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return;
+
     signed char index = -1;
     pthread_mutex_lock(&chnMtx);
     for (int i = 0; i < chnCount; i++) {
@@ -278,6 +281,9 @@ void request_idr(void) {
 }
 
 void set_grayscale(bool active) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return;
+
     pthread_mutex_lock(&chnMtx);
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
@@ -440,6 +446,9 @@ void media_audio_disable(void) {
 }
 
 int media_audio_enable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_FAILURE;
+
     int ret = EXIT_SUCCESS;
 
     if (audioOn) return ret;
@@ -523,6 +532,9 @@ int media_audio_enable(void) {
 }
 
 int media_mjpeg_disable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_SUCCESS;
+
     int ret;
 
     for (char i = 0; i < chnCount; i++) {
@@ -542,6 +554,9 @@ int media_mjpeg_disable(void) {
 }
 
 int media_mjpeg_enable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_FAILURE;
+
     int ret;
 
     int index = take_next_free_channel(true);
@@ -594,6 +609,9 @@ int media_mjpeg_enable(void) {
 }
 
 int media_mp4_disable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_SUCCESS;
+
     int ret;
 
     for (char i = 0; i < chnCount; i++) {
@@ -615,6 +633,15 @@ int media_mp4_disable(void) {
 
 int media_mp4_enable(void) {
     int ret;
+
+    if (app_config.source_type == APP_SOURCE_FH86) {
+        if (app_config.mp4_codecH265)
+            return EXIT_FAILURE;
+
+        mp4_set_config(app_config.mp4_width, app_config.mp4_height,
+            app_config.mp4_fps, HAL_AUDCODEC_UNSPEC, 0, 1, 0);
+        return EXIT_SUCCESS;
+    }
 
     int index = take_next_free_channel(true);
 

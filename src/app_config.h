@@ -11,7 +11,20 @@
 #include "hal/support.h"
 #include "region.h"
 
+enum AppSourceType {
+    APP_SOURCE_SDK = 0,
+    APP_SOURCE_FH86
+};
+
 struct AppConfig {
+    // [source]
+    enum AppSourceType source_type;
+    char source_path[128];
+    unsigned int source_max_payload;
+    unsigned int source_connect_timeout_ms;
+    unsigned int source_read_timeout_ms;
+    unsigned int source_reconnect_delay_ms;
+
     // [system]
     char sensor_config[128];
     unsigned short web_port;
@@ -119,6 +132,7 @@ struct AppConfig {
 };
 
 extern struct AppConfig app_config;
+enum ConfigError app_config_probe_source(enum AppSourceType *source_type);
 enum ConfigError app_config_parse(void);
 void app_config_restore(void);
 int app_config_save(void);

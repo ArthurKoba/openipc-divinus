@@ -1,3 +1,6 @@
+source:
+  type: sdk
+
 system:
   sensor_config: /etc/sensors/imx415.bin
   web_port: 80
