@@ -1,6 +1,7 @@
 #include "types.h"
 #include "globals.h"
 #include "tools.h"
+#include "full/fh8626_hal.h"
 
 #if defined(__ARM_PCS_VFP)
 #include "star/i3_hal.h"

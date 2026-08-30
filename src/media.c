@@ -1,4 +1,5 @@
 #include "media.h"
+#include "hal/full/fh8626_hal.h"
 
 char audioOn = 0, udpOn = 0;
 pthread_mutex_t aencMtx, chnMtx, mp4Mtx;
@@ -710,6 +711,14 @@ int media_mp4_enable(void) {
 int sdk_start(void) {
     int ret = EXIT_FAILURE;
 
+    if (plat == HAL_PLATFORM_FH8626) {
+        ret = fh8626_sdk_start(save_video_stream);
+        if (ret)
+            HAL_ERROR("media", "FH8626 native SDK startup failed with %#x!\n", ret);
+        HAL_INFO("media", "FH8626 native SDK has started successfully!\n");
+        return EXIT_SUCCESS;
+    }
+
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
         case HAL_PLATFORM_I3:  ret = i3_hal_init(); break;
@@ -909,6 +918,14 @@ int sdk_start(void) {
 }
 
 int sdk_stop(void) {
+    if (plat == HAL_PLATFORM_FH8626) {
+        int ret = fh8626_sdk_stop();
+        if (ret)
+            HAL_ERROR("media", "FH8626 native SDK shutdown failed with %#x!\n", ret);
+        HAL_INFO("media", "FH8626 native SDK had stopped successfully!\n");
+        return EXIT_SUCCESS;
+    }
+
     pthread_join(vidPid, NULL);
 
     if (app_config.jpeg_enable)

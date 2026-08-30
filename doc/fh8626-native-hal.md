@@ -41,3 +41,19 @@ The next layer copies an acquired native H.264 frame into owned scratch memory, 
 The native runtime controller is intentionally callback-driven. It encodes the proven Divinus-facing lifecycle order without acquiring devices directly, so it can be validated with a fake pipeline before physical media hardware is available. Startup is HAL -> system -> pipeline -> video -> stream. Shutdown is the exact reverse and refuses to proceed while an encoded-frame lease is outstanding.
 
 This layer does not claim unresolved FH8626 ISP, IDR, rate-control, VPSS scaling, audio, or full device-open/mmap ABI. Those remain separate evidence gates.
+
+## Native platform plumbing and stub mode
+
+The native FH8626 platform is registered as `HAL_PLATFORM_FH8626`, but production
+identification is intentionally not enabled until an exact target-safe detection
+marker is proven.  `FH8626_NATIVE_STUB` is a compile-time validation mode only.
+It selects the FH8626 platform before ordinary hardware probing and routes the
+normal `sdk_start()` / `sdk_stop()` entry points through the native runtime.
+
+Stub mode exercises the same contract/backend/adapter path as the future kernel
+backend.  Its fake kernel publishes a bounded Annex-B SPS/PPS/IDR access unit via
+the recovered MEDIA_STREAM_6 / PAE_STREAM_STEP lease semantics.  The adapter
+copies and releases the descriptor before calling the normal Divinus video sink,
+so the RTSP path cannot retain a hardware lease.  Builds without
+`FH8626_NATIVE_STUB` contain the plumbing but do not select the platform and do
+not acquire FH8626 hardware.
