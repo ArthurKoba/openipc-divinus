@@ -73,5 +73,5 @@ typedef struct {
 extern osd osds[MAX_OSD];
 extern char timefmt[64];
 
-int region_start();
-void region_stop();
+int region_start(void);
+void region_stop(void);

@@ -106,7 +106,8 @@ cleanup:
     return result;
 }
 
-void *http_post_thread(void) {
+void *http_post_thread(void *arg) {
+    (void)arg;
     hal_jpegdata jpeg = {0};
     jpeg.data = NULL;
     jpeg.length = 0;
@@ -142,7 +143,7 @@ void *http_post_thread(void) {
     return NULL;
 }
 
-void http_post_start() {
+void http_post_start(void) {
     pthread_attr_t thread_attr;
     pthread_attr_init(&thread_attr);
     size_t stacksize;
@@ -151,13 +152,13 @@ void http_post_start() {
     if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
         HAL_DANGER("http_post", "Can't set stack size %zu\n", new_stacksize);
     if (pthread_create(
-            &httpPostPid, &thread_attr, (void *(*)(void *))http_post_thread, NULL))
+            &httpPostPid, &thread_attr, http_post_thread, NULL))
         HAL_DANGER("http_post", "Starting the sender thread failed!\n");
     if (pthread_attr_setstacksize(&thread_attr, stacksize))
         HAL_DANGER("http_post", "Can't set stack size %zu\n", stacksize);
     pthread_attr_destroy(&thread_attr);
 }
 
-void http_post_stop() {
+void http_post_stop(void) {
     pthread_join(httpPostPid, NULL);
 }

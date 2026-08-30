@@ -235,6 +235,8 @@ int media_start(void) {
                 HAL_INFO("media", "Starting streaming to %s...\n", app_config.stream_dests[i]);
         }
     }
+
+    return ret;
 }
 
 void media_stop(void) {
@@ -346,6 +348,8 @@ int create_channel(char index, short width, short height, char framerate, char j
             app_config.mirror, app_config.flip);
 #endif
     }
+
+    return EXIT_FAILURE;
 }
 
 int bind_channel(char index, char framerate, char jpeg) {
@@ -368,6 +372,8 @@ int bind_channel(char index, char framerate, char jpeg) {
         case HAL_PLATFORM_CVI: return cvi_channel_bind(index);
 #endif
     }
+
+    return EXIT_FAILURE;
 }
 
 int unbind_channel(char index, char jpeg) {
@@ -390,6 +396,8 @@ int unbind_channel(char index, char jpeg) {
         case HAL_PLATFORM_CVI: return cvi_channel_unbind(index);
 #endif
     }
+
+    return EXIT_FAILURE;
 }
 
 int media_video_disable(char index, char jpeg) {
@@ -700,7 +708,7 @@ int media_mp4_enable(void) {
 }
 
 int sdk_start(void) {
-    int ret;
+    int ret = EXIT_FAILURE;
 
     switch (plat) {
 #if defined(__ARM_PCS_VFP)

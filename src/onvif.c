@@ -29,24 +29,34 @@ pthread_t onvifPid = 0;
 
 int start_onvif(void) {
     pthread_attr_t thread_attr;
+    int ret;
+
     pthread_attr_init(&thread_attr);
     size_t stacksize;
     pthread_attr_getstacksize(&thread_attr, &stacksize);
     size_t new_stacksize = 16 * 1024;
     if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
         HAL_DANGER("onvif", "Can't set stack size %zu\n", new_stacksize);
-    pthread_create(&onvifPid, &thread_attr, (void *(*)(void *))onvif_thread, NULL);
+    ret = pthread_create(&onvifPid, &thread_attr, onvif_thread, NULL);
     if (pthread_attr_setstacksize(&thread_attr, stacksize))
         HAL_DANGER("onvif", "Can't set stack size %zu\n", stacksize);
     pthread_attr_destroy(&thread_attr);
+
+    if (ret) {
+        HAL_DANGER("onvif", "Starting the discovery thread failed: %s\n",
+            strerror(ret));
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
 
 void stop_onvif(void) {
     pthread_join(onvifPid, NULL);
 }
 
-void *onvif_thread(void) {
-    struct ifaddrs *ifaddr, *ifa;
+void *onvif_thread(void *arg) {
+    (void)arg;
     char request[4096], response[4096];
     int servfd, reqLen;
     struct sockaddr_in servaddr, clntaddr;
@@ -69,6 +79,7 @@ void *onvif_thread(void) {
 
     if (bind(servfd, (struct sockaddr *)&servaddr, sizeof(servaddr)) == -1) {
         HAL_DANGER("onvif", "Failed to bind socket!\n");
+        close(servfd);
         return (void*)EXIT_FAILURE;
     }
 
@@ -90,7 +101,7 @@ void *onvif_thread(void) {
         } else if (!ret) continue;
 
         clntsz = sizeof(clntaddr);
-        if ((reqLen = recvfrom(servfd, request, sizeof(request), 0, (struct sockaddr *)&clntaddr, &clntsz)) < 0)
+        if ((reqLen = recvfrom(servfd, request, sizeof(request) - 1, 0, (struct sockaddr *)&clntaddr, &clntsz)) < 0)
             continue;
 
         request[reqLen] = '\0';
@@ -101,7 +112,7 @@ void *onvif_thread(void) {
         if (!CONTAINS(request, "http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe"))
             continue;
 
-        char device_name[64], device_uuid[64], device_url[128], msgid[100];
+        char device_name[64], device_uuid[64], device_url[128], msgid[100] = {0};
         {
             char uuid[37];
             uuid_generate(uuid);
@@ -121,7 +132,7 @@ void *onvif_thread(void) {
             }
         }
         
-        int respLen = snprintf(response, sizeof(response), discoveryxml,
+        snprintf(response, sizeof(response), discoveryxml,
             device_uuid, msgid, device_uuid, device_name, device_url);
     
         HAL_INFO("onvif", "Sending discovery response to %s:%d\n", 
@@ -173,6 +184,7 @@ bool onvif_validate_soap_auth(const char *soap_data) {
     if (!(start = strstr(soap_data, user_tag)) ||
         !(start += strlen(user_tag))) return false;
     if (!(end = strstr(start, "</Username>"))) return false;
+    if ((size_t)(end - start) >= sizeof(user)) return false;
     memcpy(user, start, end - start);
     user[end - start] = '\0';
 
@@ -181,27 +193,48 @@ bool onvif_validate_soap_auth(const char *soap_data) {
         return false;
     }
 
-    if (!(start = strstr(soap_data, pass_tag)) ||
-        !(start += strlen(pass_tag))) return false;
-    if ((pos = strstr(start, type_attr)) < (start = strchr(start, '>')) &&
-        (pos += strlen(type_attr)) && strstr(pos, digest_tag)) digest = 1;
-    if (!(end = strstr(start, "</Password>"))) return false;
-    memcpy(pass, ++start, end - start);
+    start = strstr(soap_data, pass_tag);
+    if (!start) return false;
+    start += strlen(pass_tag);
+
+    end = strchr(start, '>');
+    if (!end) return false;
+
+    pos = strstr(start, type_attr);
+    if (pos && pos < end) {
+        char *digest_pos;
+
+        pos += strlen(type_attr);
+        digest_pos = strstr(pos, digest_tag);
+        if (digest_pos && digest_pos < end)
+            digest = 1;
+    }
+
+    start = end + 1;
+    end = strstr(start, "</Password>");
+    if (!end) return false;
+    if ((size_t)(end - start) >= sizeof(pass)) return false;
+    memcpy(pass, start, end - start);
     pass[end - start] = '\0';
 
     if (digest) {
-        char digest_comp[SHA1_DIGEST_SIZE] = {0}, nonce_dec[64], pass_dec[64];
+        unsigned char digest_comp[SHA1_DIGEST_SIZE] = {0};
+        char nonce_dec[64], pass_dec[64];
         sha1_context ctx;
 
         if (!(start = strstr(soap_data, nonce_tag)) ||
             !(start = strchr(start, '>'))) return false;
-        if (!(end = strstr(++start, "</Nonce>"))) return false;
+        start++;
+        if (!(end = strstr(start, "</Nonce>"))) return false;
+        if ((size_t)(end - start) >= sizeof(nonce)) return false;
         memcpy(nonce, start, end - start);
         nonce[end - start] = '\0';
 
         if (!(start = strstr(soap_data, created_tag)) ||
             !(start = strchr(start, '>'))) return false;
-        if (!(end = strstr(++start, "</Created>"))) return false;
+        start++;
+        if (!(end = strstr(start, "</Created>"))) return false;
+        if ((size_t)(end - start) >= sizeof(created)) return false;
         memcpy(created, start, end - start);
         created[end - start] = '\0';
 

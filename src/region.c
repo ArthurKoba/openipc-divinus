@@ -156,7 +156,7 @@ int region_parse_bitmap(FILE **file, bitmapfile *bmpFile, bitmapinfo *bmpInfo) {
 
 int region_prepare_image(char *path, hal_bitmap *bitmap) {
     FILE *file;
-    unsigned char *bitmapdata, *bitmapout;
+    unsigned char *bitmapdata = NULL, *bitmapout = NULL;
     unsigned short *dest;
 
     if (!path)
@@ -219,10 +219,13 @@ int region_prepare_image(char *path, hal_bitmap *bitmap) {
     }
 
     err = spng_decode_image(ctx, bitmapdata, bitmapsize, SPNG_FMT_RGBA8, 0);
-    if (!bitmapdata) {
+    if (err) {
         HAL_DANGER("server", "Decoding the PNG image failed!\nError: %s\n", spng_strerror(err));
         goto png_error;
     }
+
+    spng_ctx_free(ctx);
+    ctx = NULL;
 
     dest = (unsigned short*)bitmapout;
     for (int i = 0; i < bitmapsize; i += 4) {
@@ -236,7 +239,7 @@ int region_prepare_image(char *path, hal_bitmap *bitmap) {
 
     bitmap->data = bitmapout;
     bitmap->dim.width = ihdr.width;
-    bitmap->dim.height = abs(ihdr.height);
+    bitmap->dim.height = ihdr.height;
 
     return EXIT_SUCCESS;
 
@@ -334,7 +337,8 @@ int region_prepare_bitmap(char *path, hal_bitmap *bitmap) {
     return EXIT_SUCCESS;
 }
 
-void *region_thread(void) {
+void *region_thread(void *arg) {
+    (void)arg;
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
         case HAL_PLATFORM_I6:  i6_region_init(); break;
@@ -541,6 +545,8 @@ found_font:;
         case HAL_PLATFORM_M6:  m6_region_deinit(); break;
 #endif
     }
+
+    return NULL;
 }
 
 int region_start() {
@@ -551,12 +557,18 @@ int region_start() {
     size_t new_stacksize = 320 * 1024;
     if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
         HAL_DANGER("region", "Can't set stack size %zu\n", new_stacksize);
-    if (pthread_create(
-            &regionPid, &thread_attr, (void *(*)(void *))region_thread, NULL))
-        HAL_DANGER("region", "Starting the handler thread failed!\n");
+    int ret = pthread_create(&regionPid, &thread_attr, region_thread, NULL);
     if (pthread_attr_setstacksize(&thread_attr, stacksize))
         HAL_DANGER("region", "Can't set stack size %zu\n", stacksize);
     pthread_attr_destroy(&thread_attr);
+
+    if (ret) {
+        HAL_DANGER("region", "Starting the handler thread failed: %s\n",
+            strerror(ret));
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
 
 void region_stop() {

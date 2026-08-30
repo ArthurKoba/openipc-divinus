@@ -14,5 +14,5 @@
 #include "hal/macros.h"
 #include "jpeg.h"
 
-void http_post_start();
-void http_post_stop();
+void http_post_start(void);
+void http_post_stop(void);

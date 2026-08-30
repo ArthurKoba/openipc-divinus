@@ -42,7 +42,8 @@ void night_mode(bool enable) {
     night_irled(enable);
 }
 
-void *night_thread(void) {
+void *night_thread(void *arg) {
+    (void)arg;
     gpio_init();
     usleep(10000);
 
@@ -50,7 +51,6 @@ void *night_thread(void) {
 
     if (app_config.adc_device[0]) {
         int adc_fd = -1;
-        fd_set adc_fds;
         int cnt = 0, tmp = 0, val;
 
         if ((adc_fd = open(app_config.adc_device, O_RDONLY | O_NONBLOCK)) <= 0) {
@@ -87,6 +87,8 @@ void *night_thread(void) {
     gpio_deinit();
     HAL_INFO("night", "Night mode thread is closing...\n");
     nightOn = 0;
+
+    return NULL;
 }
 
 int night_enable(void) {
@@ -101,14 +103,20 @@ int night_enable(void) {
     size_t new_stacksize = 16 * 1024;
     if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
         HAL_DANGER("night", "Error:  Can't set stack size %zu\n", new_stacksize);
-    pthread_create(&nightPid, &thread_attr, (void *(*)(void *))night_thread, NULL);
+    ret = pthread_create(&nightPid, &thread_attr, night_thread, NULL);
     if (pthread_attr_setstacksize(&thread_attr, stacksize))
         HAL_DANGER("night", "Error:  Can't set stack size %zu\n", stacksize);
     pthread_attr_destroy(&thread_attr);
 
+    if (ret) {
+        HAL_DANGER("night", "Starting the night mode thread failed: %s\n",
+            strerror(ret));
+        return EXIT_FAILURE;
+    }
+
     nightOn = 1;
 
-    return ret;
+    return EXIT_SUCCESS;
 }
 
 void night_disable(void) {
