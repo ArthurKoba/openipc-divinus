@@ -1,5 +1,6 @@
 #include "server.h"
 #include "source/fh8626_platform.h"
+#include "source/fh86_divinus.h"
 
 #include <math.h>
 
@@ -1440,6 +1441,42 @@ void respond_request(http_request_t *req) {
                 recordOn ? "true" : "false", start_time, app_config.record_continuous ? "true" : "false",
                 app_config.record_path, app_config.record_filename,
                 app_config.record_segment_duration, app_config.record_segment_size);
+        send_and_close(req->clntFd, response, respLen);
+        return;
+    }
+
+    if (EQUALS(req->uri, "/api/fh86") &&
+        app_config.source_type == APP_SOURCE_FH86) {
+        char source_json[1024];
+        int json_len = fh86_divinus_write_status_json(source_json, sizeof(source_json));
+        if (json_len < 0) {
+            send_http_error(req->clntFd, 500);
+            return;
+        }
+        respLen = sprintf(response,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json;charset=UTF-8\r\n"
+            "Connection: close\r\n"
+            "\r\n%s", source_json);
+        send_and_close(req->clntFd, response, respLen);
+        return;
+    }
+
+    if (EQUALS(req->uri, "/api/live") &&
+        app_config.source_type == APP_SOURCE_FH86) {
+        respLen = sprintf(response,
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: application/json;charset=UTF-8\r\n"
+            "Connection: close\r\n"
+            "\r\n"
+            "{\"source\":\"fh86\",\"codec\":\"h264\",\"preferred\":\"rtsp\","
+            "\"rtsp\":{\"available\":%s,\"port\":%d},"
+            "\"http\":{\"raw_h264\":{\"available\":true,\"path\":\"/video.264\"},"
+            "\"fmp4\":{\"available\":%s,\"path\":\"/video.mp4\"},"
+            "\"mjpeg\":{\"available\":false},"
+            "\"snapshot\":{\"available\":false}}}",
+            app_config.rtsp_enable ? "true" : "false", app_config.rtsp_port,
+            app_config.mp4_enable ? "true" : "false");
         send_and_close(req->clntFd, response, respLen);
         return;
     }
