@@ -34,11 +34,14 @@ enum fh86_stream_status {
     FH86_STREAM_ERR_TRUNCATED = -4,
     FH86_STREAM_ERR_WIRE = -5,
     FH86_STREAM_ERR_ALLOC = -6,
-    FH86_STREAM_ERR_ANNEXB = -7
+    FH86_STREAM_ERR_ANNEXB = -7,
+    FH86_STREAM_ERR_TIMEOUT = -8
 };
 
 void fh86_stream_reader_init(struct fh86_stream_reader *reader,
     fh86_stream_read_fn read_fn, void *opaque, size_t max_payload);
+
+void fh86_stream_reader_reset_session(struct fh86_stream_reader *reader);
 
 int fh86_stream_next(struct fh86_stream_reader *reader,
     struct fh86_stream_frame *frame);

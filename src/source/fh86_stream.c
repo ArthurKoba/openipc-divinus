@@ -1,5 +1,6 @@
 #include "fh86_stream.h"
 
+#include <errno.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -11,8 +12,12 @@ static int read_exact(struct fh86_stream_reader *reader, uint8_t *buffer,
         ssize_t count = reader->read_fn(reader->opaque,
             buffer + offset, length - offset);
 
-        if (count < 0)
+        if (count < 0) {
+            if (errno == ETIMEDOUT || errno == EAGAIN ||
+                errno == EWOULDBLOCK)
+                return FH86_STREAM_ERR_TIMEOUT;
             return FH86_STREAM_ERR_IO;
+        }
 
         if (count == 0) {
             if (offset == 0 && empty_is_eof)
@@ -38,6 +43,14 @@ void fh86_stream_reader_init(struct fh86_stream_reader *reader,
     reader->read_fn = read_fn;
     reader->opaque = opaque;
     reader->max_payload = max_payload;
+}
+
+void fh86_stream_reader_reset_session(struct fh86_stream_reader *reader) {
+    if (!reader)
+        return;
+
+    reader->generation = 0;
+    reader->have_generation = 0;
 }
 
 void fh86_stream_frame_release(struct fh86_stream_frame *frame) {
