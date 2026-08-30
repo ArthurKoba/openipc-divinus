@@ -468,6 +468,12 @@ error:
             __PARSE_ERROR(con);
         }
 
+        /* __read_line() already marks and detaches an EOF connection.
+         * Return before METHOD_NONE can detach the same pool reference again;
+         * the normal list sweep will remove the disconnected entry. */
+        if (con->con_state == __CON_S_DISCONNECTED)
+            return SUCCESS;
+
         if (con->parser_state == __PARSER_S_ERROR) {
             __method_error(con, h);
         } else {
