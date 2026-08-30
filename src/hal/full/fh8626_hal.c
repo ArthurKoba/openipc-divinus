@@ -2,6 +2,7 @@
 #include "../globals.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -29,6 +30,8 @@ struct fh8626_stub_context {
     uint32_t desc[FH8626_MEDIA_STREAM_DESC_WORDS];
     unsigned media_calls;
     unsigned step_calls;
+    unsigned eagain_every;
+    int wrap_frame;
 };
 
 static struct fh8626_stub_context stub;
@@ -57,6 +60,29 @@ static struct fh8626_native_runtime_ops stub_runtime_ops(void)
     return ops;
 }
 
+static unsigned stub_env_unsigned(const char *name)
+{
+    const char *value = getenv(name);
+    char *end = NULL;
+    unsigned long parsed;
+
+    if (!value || !*value)
+        return 0;
+    errno = 0;
+    parsed = strtoul(value, &end, 10);
+    if (errno || !end || *end || parsed > UINT_MAX)
+        return 0;
+    return (unsigned)parsed;
+}
+
+static int stub_env_enabled(const char *name)
+{
+    const char *value = getenv(name);
+
+    return value && (!strcmp(value, "1") || !strcmp(value, "true") ||
+        !strcmp(value, "yes") || !strcmp(value, "on"));
+}
+
 static void stub_prepare_frame(struct fh8626_stub_context *ctx)
 {
     static const uint8_t frame[] = {
@@ -64,11 +90,21 @@ static void stub_prepare_frame(struct fh8626_stub_context *ctx)
         0x00,0x00,0x00,0x01,0x68,0xce,0x06,0xe2,
         0x00,0x00,0x00,0x01,0x65,0x88,0x84,0x21
     };
-    const uint32_t offset = 32u;
+    uint32_t offset = 32u;
+    size_t tail;
+
+    if (ctx->wrap_frame)
+        offset = FH8626_STUB_RING_SIZE - 10u;
 
     memset(ctx->ring, 0, sizeof(ctx->ring));
     memset(ctx->desc, 0, sizeof(ctx->desc));
-    memcpy(ctx->ring + offset, frame, sizeof(frame));
+    tail = sizeof(ctx->ring) - offset;
+    if (sizeof(frame) <= tail) {
+        memcpy(ctx->ring + offset, frame, sizeof(frame));
+    } else {
+        memcpy(ctx->ring + offset, frame, tail);
+        memcpy(ctx->ring, frame + tail, sizeof(frame) - tail);
+    }
     ctx->desc[1] = FH8626_MEDIA_STREAM_KIND;
     ctx->desc[6] = 0x22000000u;
     ctx->desc[7] = FH8626_STUB_RING_BASE + offset;
@@ -82,6 +118,8 @@ static int stub_ioctl(void *opaque, int fd, unsigned long request, void *arg)
 
     if (request == FH8626_MEDIA_STREAM_6) {
         ctx->media_calls++;
+        if (ctx->eagain_every && ctx->media_calls % ctx->eagain_every == 0u)
+            return -EAGAIN;
         memcpy(arg, ctx->desc, sizeof(ctx->desc));
         return 0;
     }
@@ -154,7 +192,11 @@ int fh8626_sdk_start(fh8626_video_sink sink)
 
     if (!sink)
         return -EINVAL;
+    if (stub.lock_ready)
+        return -EBUSY;
     memset(&stub, 0, sizeof(stub));
+    stub.eagain_every = stub_env_unsigned("FH8626_STUB_EAGAIN_EVERY");
+    stub.wrap_frame = stub_env_enabled("FH8626_STUB_WRAP");
     ret = pthread_mutex_init(&stub.lock, NULL);
     if (ret)
         return -ret;
@@ -206,6 +248,25 @@ fail:
         stub.lock_ready = 0;
     }
     return ret;
+#endif
+}
+
+int fh8626_hal_stub_get_stats(struct fh8626_stub_stats *stats)
+{
+    if (!stats)
+        return -EINVAL;
+#ifndef FH8626_NATIVE_STUB
+    memset(stats, 0, sizeof(*stats));
+    return -ENOTSUP;
+#else
+    stats->media_calls = stub.media_calls;
+    stats->step_calls = stub.step_calls;
+    stats->frames_delivered = stub.adapter.frames_delivered;
+    stats->sink_errors = stub.adapter.sink_errors;
+    stats->leases_started = stub.runtime.life.leases_started;
+    stats->leases_released = stub.runtime.life.leases_released;
+    stats->life_state = stub.runtime.life.state;
+    return 0;
 #endif
 }
 
