@@ -35,7 +35,9 @@ static inline void app_config_open(FILE **file, const char *flags) {
         if (!access(conf_path, F_OK)) {
             if (*flags == 'w') {
                 char bak_path[PATH_MAX];
-                sprintf(bak_path, "%s.bak", conf_path);
+                if (snprintf(bak_path, sizeof(bak_path), "%s.bak", conf_path) >=
+                        (int)sizeof(bak_path))
+                    return;
                 remove(bak_path);
                 rename(conf_path, bak_path);
             }
@@ -48,7 +50,9 @@ static inline void app_config_open(FILE **file, const char *flags) {
         if (access(*path++, F_OK)) continue;
         if (*flags == 'w') {
             char bak_path[PATH_MAX];
-            sprintf(bak_path, "%s.bak", *(path - 1));
+            if (snprintf(bak_path, sizeof(bak_path), "%s.bak", *(path - 1)) >=
+                    (int)sizeof(bak_path))
+                return;
             remove(bak_path);
             rename(*(path - 1), bak_path);
         }
@@ -65,7 +69,9 @@ void app_config_restore(void) {
         char bak_path[PATH_MAX], *dir = dirname(exe_path);
         exe_path[exe_len] = '\0';
         snprintf(conf_path, sizeof(conf_path), "%s/divinus.yaml", dir);
-        sprintf(bak_path, "%s.bak", conf_path);
+        if (snprintf(bak_path, sizeof(bak_path), "%s.bak", conf_path) >=
+                (int)sizeof(bak_path))
+            return;
         if (!access(bak_path, F_OK)) {
             remove(conf_path);
             rename(bak_path, conf_path);
@@ -76,7 +82,9 @@ void app_config_restore(void) {
     const char **path = appconf_paths;
     while (*path) {
         char bak_path[PATH_MAX];
-        sprintf(bak_path, "%s.bak", *path);
+        if (snprintf(bak_path, sizeof(bak_path), "%s.bak", *path) >=
+                (int)sizeof(bak_path))
+            return;
         if (!access(bak_path, F_OK)) {
             remove(*path);
             rename(bak_path, *path);

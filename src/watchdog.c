@@ -4,7 +4,8 @@ int fd = 0;
 
 void watchdog_reset(void) {
     if (!fd) return;
-    write(fd, "", 1);
+    if (write(fd, "", 1) != 1)
+        HAL_WARNING("watchdog", "Failed to reset watchdog!\n");
 }
 
 int watchdog_start(int timeout) {
@@ -27,7 +28,8 @@ int watchdog_start(int timeout) {
 
 void watchdog_stop(void) {
     if (!fd) return;
-    write(fd, "V", 1);
+    if (write(fd, "V", 1) != 1)
+        HAL_WARNING("watchdog", "Failed to disarm watchdog cleanly!\n");
     close(fd);
     fd = 0;
 

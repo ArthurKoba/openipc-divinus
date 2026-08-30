@@ -22,13 +22,15 @@ char graceful = 0, keepRunning = 1;
 void handle_error(int signo) {
     char msg[64];
     sprintf(msg, "Error occured (%d)! Quitting...\n", signo);
-    write(STDERR_FILENO, msg, strlen(msg));
+    ssize_t ignored = write(STDERR_FILENO, msg, strlen(msg));
+    (void)ignored;
     keepRunning = 0;
     exit(EXIT_FAILURE);
 }
 
 void handle_exit(int signo) {
-    write(STDERR_FILENO, "Graceful shutdown...\n", 21);
+    ssize_t ignored = write(STDERR_FILENO, "Graceful shutdown...\n", 21);
+    (void)ignored;
     keepRunning = 0;
     graceful = 1;
 }

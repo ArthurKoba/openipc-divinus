@@ -355,8 +355,8 @@ float hal_temperature_read(void) {
                 FILE* file;
                 char line[10] = {0};
                 if (file = fopen("/sys/class/thermal/thermal_zone0/temp", "r")) {
-                    fgets(line, 10, file);
-                    lastReadTemp = strtof(line, NULL) / 1000.0;
+                    if (fgets(line, sizeof(line), file))
+                        lastReadTemp = strtof(line, NULL) / 1000.0;
                     fclose(file);
                 }
             } else lastMillisTemp = UINT64_MAX;

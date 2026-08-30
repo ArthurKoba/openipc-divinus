@@ -434,7 +434,7 @@ static enum BufError create_header() {
     else
         err = flv_write_avc_sequence_header();
     chk_err;
-    HAL_INFO("flv", "Following sequence header (offset=%zu)\n", buf_header.offset);
+    HAL_INFO("flv", "Following sequence header (offset=%u)\n", buf_header.offset);
     return BUF_OK;
 }
 

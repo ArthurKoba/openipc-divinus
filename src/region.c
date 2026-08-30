@@ -60,16 +60,24 @@ void region_fill_formatted(char* str) {
             char tmp[6];
             unsigned int cpu[6];
             FILE *stat = fopen("/proc/stat", "r");
-            fscanf(stat, "%s %u %u %u %u %u %u",
-                tmp, &cpu[0], &cpu[1], &cpu[2], &cpu[3], &cpu[4], &cpu[5]);
+            if (!stat)
+                continue;
+            if (fscanf(stat, "%5s %u %u %u %u %u %u",
+                    tmp, &cpu[0], &cpu[1], &cpu[2], &cpu[3], &cpu[4], &cpu[5]) != 7) {
+                fclose(stat);
+                continue;
+            }
             fclose(stat);
 
-            char c[5];
-            char avg = 100 - (cpu[3] - cpu_l[3]) / sysconf(_SC_NPROCESSORS_ONLN);
-            sprintf(c, "%d%%", avg);
+            char c[16];
+            long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+            if (cpu_count < 1)
+                cpu_count = 1;
+            int avg = 100 - (int)((cpu[3] - cpu_l[3]) / (unsigned long)cpu_count);
+            snprintf(c, sizeof(c), "%d%%", avg);
             strcat(out, c);
             opos += strlen(c);
-            for (int i = 0; i < sizeof(cpu) / sizeof(cpu[0]); i++)
+            for (size_t i = 0; i < sizeof(cpu) / sizeof(cpu[0]); i++)
                 cpu_l[i] = cpu[i];
         }
         else if (str[ipos + 1] == 'M')
@@ -200,13 +208,13 @@ int region_prepare_image(char *path, hal_bitmap *bitmap) {
 
     bitmapdata = malloc(bitmapsize);
     if (!bitmapdata) {
-        HAL_DANGER("server", "Allocating the PNG bitmap input buffer for size %u failed!\n", bitmapsize);
+        HAL_DANGER("server", "Allocating the PNG bitmap input buffer for size %zu failed!\n", bitmapsize);
         goto png_error;
     }
 
     bitmapout = malloc(bitmapsize / 2);
     if (!bitmapout) {
-        HAL_DANGER("server", "Allocating the PNG bitmap output buffer for size %u failed!\n", bitmapsize / 2);
+        HAL_DANGER("server", "Allocating the PNG bitmap output buffer for size %zu failed!\n", bitmapsize / 2);
         goto png_error;
     }
 

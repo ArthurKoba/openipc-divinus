@@ -27,7 +27,7 @@ char *buf_error_to_str(const enum BufError err) {
         return "BUF_INCORRECT";
     default: {
         static char str[32];
-        sprintf(str, "Unknown(%d)\0", err);
+        snprintf(str, sizeof(str), "Unknown(%d)", err);
         return str;
     }
     }
