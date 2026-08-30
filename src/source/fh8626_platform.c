@@ -29,7 +29,7 @@ int fh8626_platform_write_json(char *buffer, size_t size,
         "\"temperature\":\"unavailable\",\"gpio\":\"unavailable\","
         "\"jpeg\":\"unavailable\",\"mjpeg\":\"unavailable\","
         "\"audio\":\"unavailable\",\"osd\":\"unavailable\"},"
-        "\"api\":{\"live\":\"/api/live\",\"source\":\"/api/fh86\"}}",
+        "\"api\":{\"live\":\"/api/live\",\"source\":\"/api/fh86\",\"webdiag\":\"/fh8626\"}}",
         FH8626_CHIP, FH8626_FAMILY, FH8626_SENSOR,
         rtsp_enabled ? "available" : "disabled",
         mp4_enabled ? "available" : "disabled");

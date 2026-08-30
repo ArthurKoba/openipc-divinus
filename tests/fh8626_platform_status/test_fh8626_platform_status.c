@@ -45,6 +45,9 @@ int main(void) {
     require_true(strstr(json, "\"fmp4\":\"available\"") != NULL,
         "fMP4 capability reflects config");
 
+    require_true(strstr(json, "\"webdiag\":\"/fh8626\"") != NULL,
+        "FH8626 web diagnostics route advertised");
+
     require_true(fh8626_platform_write_json(json, 8, 1, 1) < 0,
         "short output buffer rejected");
 

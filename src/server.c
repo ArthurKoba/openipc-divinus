@@ -1,5 +1,6 @@
 #include "server.h"
 #include "source/fh8626_platform.h"
+#include "source/fh8626_webdiag.h"
 #include "source/fh86_divinus.h"
 
 #include <math.h>
@@ -707,6 +708,12 @@ void respond_request(http_request_t *req) {
 
     if (EQUALS(req->uri, "/") || EQUALS(req->uri, "/index.htm") || EQUALS(req->uri, "/index.html")) {
         send_html(req->clntFd, indexhtml);
+        return;
+    }
+
+    if ((EQUALS(req->uri, "/fh8626") || EQUALS(req->uri, "/fh8626/")) &&
+        app_config.source_type == APP_SOURCE_FH86) {
+        send_html(req->clntFd, fh8626_webdiag_html());
         return;
     }
 
