@@ -151,11 +151,77 @@ static void test_bad_header(void) {
         FH86_STREAM_ERR_WIRE);
 }
 
+static void test_oversized_payload_rejected_before_payload_read(void) {
+    uint8_t header[FH86_WIRE_HEADER_SIZE] = {0};
+    struct memory_reader input = {
+        header, sizeof(header), 0, 0
+    };
+    struct fh86_stream_reader reader;
+    struct fh86_stream_frame frame;
+
+    memcpy(header, "FH86", 4);
+    put_be32(header + 4, FH86_WIRE_VERSION);
+    put_be32(header + 8, 4096);
+    put_be64(header + 24, 1);
+
+    fh86_stream_reader_init(&reader, memory_read, &input, 1024);
+
+    assert(fh86_stream_next(&reader, &frame) == FH86_STREAM_ERR_WIRE);
+    assert(input.offset == FH86_WIRE_HEADER_SIZE);
+    assert(frame.data == NULL);
+}
+
+static void test_truncated_header(void) {
+    uint8_t header[FH86_WIRE_HEADER_SIZE] = {0};
+    struct memory_reader input = {
+        header, FH86_WIRE_HEADER_SIZE - 7, 0, 3
+    };
+    struct fh86_stream_reader reader;
+    struct fh86_stream_frame frame;
+
+    memcpy(header, "FH86", 4);
+    put_be32(header + 4, FH86_WIRE_VERSION);
+    put_be32(header + 8, 8);
+
+    fh86_stream_reader_init(&reader, memory_read, &input, 1024);
+
+    assert(fh86_stream_next(&reader, &frame) == FH86_STREAM_ERR_TRUNCATED);
+    assert(frame.data == NULL);
+}
+
+static void test_session_reset_accepts_generation_restart(void) {
+    static const uint8_t payload[] = {0, 0, 0, 1, 0x65, 1, 2};
+    uint8_t first[64], second[64];
+    size_t first_len = 0, second_len = 0;
+    struct memory_reader input;
+    struct fh86_stream_reader reader;
+    struct fh86_stream_frame frame;
+
+    append_frame(first, &first_len, payload, sizeof(payload), 9000, 9, 0);
+    append_frame(second, &second_len, payload, sizeof(payload), 1000, 1, 0);
+
+    input = (struct memory_reader){first, first_len, 0, 0};
+    fh86_stream_reader_init(&reader, memory_read, &input, 1024);
+    assert(fh86_stream_next(&reader, &frame) == FH86_STREAM_OK);
+    assert(frame.generation == 9 && frame.generation_changed == 1);
+    fh86_stream_frame_release(&frame);
+
+    fh86_stream_reader_reset_session(&reader);
+    input = (struct memory_reader){second, second_len, 0, 0};
+    reader.opaque = &input;
+    assert(fh86_stream_next(&reader, &frame) == FH86_STREAM_OK);
+    assert(frame.generation == 1 && frame.generation_changed == 1);
+    fh86_stream_frame_release(&frame);
+}
+
 int main(void) {
     test_fragmented_and_generations();
     test_truncated_payload();
     test_invalid_annexb();
     test_bad_header();
+    test_oversized_payload_rejected_before_payload_read();
+    test_truncated_header();
+    test_session_reset_accepts_generation_restart();
 
     puts("fh86_stream PASS");
     return 0;

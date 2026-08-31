@@ -123,8 +123,9 @@ int save_video_stream(char index, hal_vidstream *stream) {
                 if (recordOn) send_mp4_to_record(stream, isH265);
                 pthread_mutex_unlock(&mp4Mtx);
 
-                send_h26x_to_client(index, stream);
             }
+            if (app_config.mp4_enable || app_config.source_type == APP_SOURCE_FH86)
+                send_h26x_to_client(index, stream);
             if (app_config.rtsp_enable)
                 rtp_send_h26x(rtspHandle, stream, isH265);
 

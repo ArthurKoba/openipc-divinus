@@ -87,9 +87,6 @@ int fh86_divinus_start(void) {
     chnCount = 1;
     source_sequence = 0;
     source_pack_errors = 0;
-    pthread_mutex_lock(&source_diag_lock);
-    fh86_live_diag_reset(&source_diag, 1);
-    pthread_mutex_unlock(&source_diag_lock);
 
     config.path = app_config.source_path;
     config.max_payload = app_config.source_max_payload;
@@ -103,6 +100,10 @@ int fh86_divinus_start(void) {
         chnCount = 0;
         return EXIT_FAILURE;
     }
+
+    pthread_mutex_lock(&source_diag_lock);
+    fh86_live_diag_reset(&source_diag, 1);
+    pthread_mutex_unlock(&source_diag_lock);
 
     if (app_config.mp4_enable)
         mp4_set_config(app_config.mp4_width, app_config.mp4_height,

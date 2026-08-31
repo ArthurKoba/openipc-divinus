@@ -1,20 +1,19 @@
-# FH8626 Web diagnostics V9
+# FH8626 Web diagnostics V11 candidate
 
-This checkpoint adds a self-contained FH8626 diagnostics page at `/fh8626`.
-It does not alter the generic Divinus WebUI and does not add fake hardware
-providers.
+Base checkpoint expected in the user's WSL Divinus branch: `74a797e` (`Add FH8626 live diagnostics web page`).
 
-The page consumes the read-only backend contracts introduced by V7/V8:
+This is an Agent 6-only diagnostics hardening delta. It does not touch the FH8626 hardware owner, ISP, sensor, board, GPIO or Agent 7 source.
 
-- `/api/status`
-- `/api/platform`
-- `/api/fh86`
-- `/api/live`
+Changes relative to V9:
 
-It displays source state/counters, platform identity, provider availability and
-runtime status. Browser preview is opt-in and uses `/video.mp4` only when the
-fMP4 endpoint is enabled. RTSP remains the preferred external-player path.
+- browser preview starts disabled and is enabled only when `/api/live` reports fMP4 available;
+- an active preview is stopped if fMP4 becomes unavailable;
+- RTSP copy is disabled when RTSP is unavailable rather than constructing a fake usable URL;
+- RTSP URL honors a capability-provided path when one exists and falls back to `/`;
+- raw H.264 link follows the capability/path returned by `/api/live`;
+- clipboard copy has a non-secure-HTTP fallback because the camera UI is normally served over plain HTTP;
+- browser `play()` failure is surfaced and does not leave preview state falsely active;
+- polling is guarded so a slow request cannot overlap the next 2-second refresh;
+- failure of `/api/live` explicitly disables all live controls.
 
-Temperature, GPIO, JPEG/MJPEG, audio and OSD continue to show `unavailable`
-until real FH8626 providers exist. This checkpoint does not touch Agent 7,
-ISP, sensor control, GPIO or board code.
+Build and test status: **PENDING_WSL**. Per project policy no host/ARM build or test result is claimed from the agent sandbox.

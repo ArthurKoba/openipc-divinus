@@ -180,6 +180,24 @@ void send_http_error(int fd, int code) {
     send_and_close(fd, buffer, len);
 }
 
+static void send_fh86_provider_unavailable(int fd, const char *provider) {
+    char response[384];
+    int len = snprintf(response, sizeof(response),
+        "HTTP/1.1 503 Service Unavailable\r\n"
+        "Content-Type: application/json;charset=UTF-8\r\n"
+        "Connection: close\r\n"
+        "\r\n"
+        "{\"available\":false,\"provider\":\"%s\","
+        "\"reason\":\"fh86 external source has no provider contract\"}",
+        provider);
+
+    if (len < 0 || (size_t)len >= sizeof(response)) {
+        send_http_error(fd, 500);
+        return;
+    }
+    send_and_close(fd, response, len);
+}
+
 void send_h26x_to_client(char index, hal_vidstream *stream) {
     for (unsigned int i = 0; i < stream->count; ++i) {
         hal_vidpack *pack = &stream->pack[i];
@@ -875,6 +893,10 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/audio")) {
+        if (app_config.source_type == APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "audio");
+            return;
+        }
         if (req->query) {
             char *remain;
             while (req->query) {
@@ -955,6 +977,10 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/isp")) {
+        if (app_config.source_type == APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "isp");
+            return;
+        }
         if (req->query) {
             char *remain;
             while (req->query) {
@@ -991,6 +1017,10 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/jpeg")) {
+        if (app_config.source_type == APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "jpeg");
+            return;
+        }
         if (req->query) {
             char *remain;
             while (req->query) {
@@ -1031,6 +1061,10 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/mjpeg")) {
+        if (app_config.source_type == APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "mjpeg");
+            return;
+        }
         if (req->query) {
             char *remain;
             while (req->query) {
@@ -1189,6 +1223,10 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/night")) {
+        if (app_config.source_type == APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "night");
+            return;
+        }
         if (req->query) {
             char *remain;
             while (req->query) {
@@ -1509,7 +1547,7 @@ void respond_request(http_request_t *req) {
     if (EQUALS(req->uri, "/api/status")) {
         struct sysinfo si;
         float temperature;
-        char memory[16], uptime[48], temp[24];
+        char memory[16], uptime[48], temp_json[32];
         const char *source_name;
         sysinfo(&si);
         short free = (si.freeram + si.bufferram) / 1024 / 1024;
@@ -1522,11 +1560,15 @@ void respond_request(http_request_t *req) {
         else
             sprintf(uptime, "%ld:%02ld", si.uptime / 60, si.uptime % 60);
 
-        temperature = hal_temperature_read();
-        if (isfinite(temperature))
-            snprintf(temp, sizeof(temp), "%.1f\u00B0C", temperature);
-        else
-            snprintf(temp, sizeof(temp), "unavailable");
+        if (app_config.source_type == APP_SOURCE_FH86) {
+            strcpy(temp_json, "null");
+        } else {
+            temperature = hal_temperature_read();
+            if (isfinite(temperature))
+                snprintf(temp_json, sizeof(temp_json), "\"%.1f\\u00B0C\"", temperature);
+            else
+                strcpy(temp_json, "\"unavailable\"");
+        }
         source_name = app_config.source_type == APP_SOURCE_FH86 ? "fh86" : "sdk";
 
         respLen = sprintf(response,
@@ -1535,10 +1577,10 @@ void respond_request(http_request_t *req) {
             "Connection: close\r\n"
             "\r\n"
             "{\"chip\":\"%s\",\"loadavg\":[%.2f,%.2f,%.2f],\"memory\":\"%s\","
-            "\"sensor\":\"%s\",\"temp\":\"%s\",\"uptime\":\"%s\","
+            "\"sensor\":\"%s\",\"temp\":%s,\"uptime\":\"%s\","
             "\"source\":\"%s\",\"family\":\"%s\"}",
             chip, si.loads[0] / 65536.0, si.loads[1] / 65536.0, si.loads[2] / 65536.0,
-            memory, sensor, temp, uptime, source_name, family);
+            memory, sensor, temp_json, uptime, source_name, family);
         send_and_close(req->clntFd, response, respLen);
         return;
     }
