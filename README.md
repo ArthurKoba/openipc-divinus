@@ -45,9 +45,15 @@ In spite of these design choices, Divinus boasts numerous features that cater to
 | infinity6e[^15]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | infinity6c[^16]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | mercury6[^17]           | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
+| FH8626V100 (external H.264 owner) | owner-provided | ✗ | ✔️ | ✔️ | ✗ |
 | sun8iw21p1[^18]         | ↻            | ↻            | ↻           | ↻           | ↻                 |
 
 _✔️ - supported, ↻ - in development, ✗ - unsupported, ⁿ/ₐ - not supported by hardware_
+
+FH8626V100 uses the generic `source: fh86` frontend. A separate media owner
+provides encoded H.264 frames over the configured Unix socket; Divinus owns the
+frontend services (RTSP, fMP4, WebUI and API), not the camera board's ISP/VENC.
+Board-specific controls and policies belong in the downstream device profile.
 
 _* At the moment, text, RGB or bitfield bitmaps and PNG overlays are handled, more matricial formats and covers are to follow_
 

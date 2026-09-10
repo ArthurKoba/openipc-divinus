@@ -2,6 +2,17 @@
 
 This document describes the fields that can be found within a configuration file for Divinus.
 
+## Source section
+
+- **type**: Video source backend. `sdk` keeps the normal hardware HAL path; `fh86` consumes an external FH86 v1 Annex-B H.264 stream.
+- **path**: Unix-domain socket path used by the `fh86` source. Required for `fh86`; no implicit endpoint is selected.
+- **max_payload**: Maximum accepted encoded access-unit payload in bytes (default: `4194304`).
+- **connect_timeout_ms**: Maximum duration of one source connection attempt in milliseconds (default: `500`).
+- **read_timeout_ms**: Maximum wait for source data while assembling a frame in milliseconds (default: `250`).
+- **reconnect_delay_ms**: Delay between failed/disconnected source sessions in milliseconds (default: `250`).
+
+The current `fh86` bridge is an encoded H.264 source only. Hardware-owned audio, JPEG/MJPEG, OSD, night-mode and HTTP snapshot functions must remain disabled while this source is selected. A reconnect starts a new source session and resets generation ordering so an owner process restart may legitimately resume at generation 1.
+
 ## System section
 
 - **sensor_config**: Path to the sensor calibration or configuration file, if applicable (e.g., `/etc/sensors/imx415.bin`).

@@ -18,6 +18,18 @@ float lastReadTemp = 0.0 / 0.0;
 
 void hal_identify(void) {
     unsigned int val = 0;
+
+    if (fh8626_hal_stub_enabled()) {
+        plat = HAL_PLATFORM_FH8626;
+        strcpy(chip, "FH8626V100");
+        strcpy(family, "fullhan-fh8626-stub");
+        chnCount = FH8626_VENC_CHN_NUM;
+        chnState = fh8626_state;
+        aud_thread = NULL;
+        isp_thread = NULL;
+        vid_thread = NULL;
+        return;
+    }
     FILE *file;
     char *endMark, line[200] = {0};
 
@@ -355,8 +367,8 @@ float hal_temperature_read(void) {
                 FILE* file;
                 char line[10] = {0};
                 if (file = fopen("/sys/class/thermal/thermal_zone0/temp", "r")) {
-                    fgets(line, 10, file);
-                    lastReadTemp = strtof(line, NULL) / 1000.0;
+                    if (fgets(line, sizeof(line), file))
+                        lastReadTemp = strtof(line, NULL) / 1000.0;
                     fclose(file);
                 }
             } else lastMillisTemp = UINT64_MAX;

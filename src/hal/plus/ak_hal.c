@@ -1,6 +1,7 @@
 #if defined(__arm__) && !defined(__ARM_PCS_VFP)
 
 #include "ak_hal.h"
+#include "../tools.h"
 
 ak_aud_impl  ak_aud;
 ak_sys_impl  ak_sys;

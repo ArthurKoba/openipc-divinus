@@ -4,6 +4,24 @@ const char *appconf_paths[] = {"./divinus.yaml", "/etc/divinus.yaml"};
 
 struct AppConfig app_config;
 
+static enum ConfigError parse_source_type(
+    struct IniConfig *ini, enum AppSourceType *source_type) {
+    const char *source_types[] = {"sdk", "fh86"};
+    int value = APP_SOURCE_SDK;
+    enum ConfigError err = parse_enum(ini, "source", "type", &value,
+        source_types, sizeof(source_types) / sizeof(*source_types), 0);
+
+    if (err == CONFIG_SECTION_NOT_FOUND || err == CONFIG_PARAM_NOT_FOUND) {
+        *source_type = APP_SOURCE_SDK;
+        return CONFIG_OK;
+    }
+    if (err != CONFIG_OK)
+        return err;
+
+    *source_type = (enum AppSourceType)value;
+    return CONFIG_OK;
+}
+
 static inline void app_config_open(FILE **file, const char *flags) {
     const char **path = appconf_paths;
     char conf_path[PATH_MAX], exe_path[PATH_MAX];
@@ -17,7 +35,9 @@ static inline void app_config_open(FILE **file, const char *flags) {
         if (!access(conf_path, F_OK)) {
             if (*flags == 'w') {
                 char bak_path[PATH_MAX];
-                sprintf(bak_path, "%s.bak", conf_path);
+                if (snprintf(bak_path, sizeof(bak_path), "%s.bak", conf_path) >=
+                        (int)sizeof(bak_path))
+                    return;
                 remove(bak_path);
                 rename(conf_path, bak_path);
             }
@@ -30,7 +50,9 @@ static inline void app_config_open(FILE **file, const char *flags) {
         if (access(*path++, F_OK)) continue;
         if (*flags == 'w') {
             char bak_path[PATH_MAX];
-            sprintf(bak_path, "%s.bak", *(path - 1));
+            if (snprintf(bak_path, sizeof(bak_path), "%s.bak", *(path - 1)) >=
+                    (int)sizeof(bak_path))
+                return;
             remove(bak_path);
             rename(*(path - 1), bak_path);
         }
@@ -47,7 +69,9 @@ void app_config_restore(void) {
         char bak_path[PATH_MAX], *dir = dirname(exe_path);
         exe_path[exe_len] = '\0';
         snprintf(conf_path, sizeof(conf_path), "%s/divinus.yaml", dir);
-        sprintf(bak_path, "%s.bak", conf_path);
+        if (snprintf(bak_path, sizeof(bak_path), "%s.bak", conf_path) >=
+                (int)sizeof(bak_path))
+            return;
         if (!access(bak_path, F_OK)) {
             remove(conf_path);
             rename(bak_path, conf_path);
@@ -58,7 +82,9 @@ void app_config_restore(void) {
     const char **path = appconf_paths;
     while (*path) {
         char bak_path[PATH_MAX];
-        sprintf(bak_path, "%s.bak", *path);
+        if (snprintf(bak_path, sizeof(bak_path), "%s.bak", *path) >=
+                (int)sizeof(bak_path))
+            return;
         if (!access(bak_path, F_OK)) {
             remove(*path);
             rename(bak_path, *path);
@@ -67,12 +93,45 @@ void app_config_restore(void) {
     }
 }
 
+enum ConfigError app_config_probe_source(enum AppSourceType *source_type) {
+    struct IniConfig ini;
+    FILE *file;
+    enum ConfigError err;
+
+    if (!source_type)
+        return CONFIG_PARAM_INVALID_FORMAT;
+
+    memset(&ini, 0, sizeof(ini));
+    app_config_open(&file, "r");
+    if (!open_config(&ini, &file))
+        return CONFIG_PARAM_INVALID_FORMAT;
+
+    find_sections(&ini);
+    err = parse_source_type(&ini, source_type);
+    free(ini.str);
+    return err;
+}
+
 int app_config_save(void) {
     FILE *file;
 
     app_config_open(&file, "w");
     if (!file)
         HAL_ERROR("app_config", "Can't open config file for writing\n");
+
+    fprintf(file, "source:\n");
+    fprintf(file, "  type: %s\n",
+        app_config.source_type == APP_SOURCE_FH86 ? "fh86" : "sdk");
+    if (app_config.source_type == APP_SOURCE_FH86) {
+        fprintf(file, "  path: %s\n", app_config.source_path);
+        fprintf(file, "  max_payload: %u\n", app_config.source_max_payload);
+        fprintf(file, "  connect_timeout_ms: %u\n",
+            app_config.source_connect_timeout_ms);
+        fprintf(file, "  read_timeout_ms: %u\n",
+            app_config.source_read_timeout_ms);
+        fprintf(file, "  reconnect_delay_ms: %u\n",
+            app_config.source_reconnect_delay_ms);
+    }
 
     fprintf(file, "system:\n");
     fprintf(file, "  sensor_config: %s\n", app_config.sensor_config);
@@ -215,6 +274,13 @@ int app_config_save(void) {
 enum ConfigError app_config_parse(void) {
     memset(&app_config, 0, sizeof(struct AppConfig));
 
+    app_config.source_type = APP_SOURCE_SDK;
+    app_config.source_path[0] = '\0';
+    app_config.source_max_payload = 4 * 1024 * 1024;
+    app_config.source_connect_timeout_ms = 500;
+    app_config.source_read_timeout_ms = 250;
+    app_config.source_reconnect_delay_ms = 250;
+
     app_config.web_port = 8080;
     *app_config.web_whitelist[0] = '\0';
     app_config.web_enable_auth = false;
@@ -293,7 +359,36 @@ enum ConfigError app_config_parse(void) {
     enum ConfigError err;
     find_sections(&ini);
 
-    if (plat != HAL_PLATFORM_GM && plat != HAL_PLATFORM_RK) {
+    err = parse_source_type(&ini, &app_config.source_type);
+    if (err != CONFIG_OK)
+        goto RET_ERR;
+
+    if (app_config.source_type == APP_SOURCE_FH86) {
+        err = parse_param_value(&ini, "source", "path", app_config.source_path);
+        if (err != CONFIG_OK || EMPTY(app_config.source_path)) {
+            err = CONFIG_PARAM_INVALID_FORMAT;
+            goto RET_ERR;
+        }
+        err = parse_uint32(&ini, "source", "max_payload", 1024, INT_MAX,
+            &app_config.source_max_payload);
+        if (err != CONFIG_OK && err != CONFIG_PARAM_NOT_FOUND)
+            goto RET_ERR;
+        err = parse_uint32(&ini, "source", "connect_timeout_ms", 1, INT_MAX,
+            &app_config.source_connect_timeout_ms);
+        if (err != CONFIG_OK && err != CONFIG_PARAM_NOT_FOUND)
+            goto RET_ERR;
+        err = parse_uint32(&ini, "source", "read_timeout_ms", 1, INT_MAX,
+            &app_config.source_read_timeout_ms);
+        if (err != CONFIG_OK && err != CONFIG_PARAM_NOT_FOUND)
+            goto RET_ERR;
+        err = parse_uint32(&ini, "source", "reconnect_delay_ms", 0, INT_MAX,
+            &app_config.source_reconnect_delay_ms);
+        if (err != CONFIG_OK && err != CONFIG_PARAM_NOT_FOUND)
+            goto RET_ERR;
+    }
+
+    if (app_config.source_type == APP_SOURCE_SDK &&
+        plat != HAL_PLATFORM_GM && plat != HAL_PLATFORM_RK) {
         err = parse_param_value(&ini, "system", "sensor_config", app_config.sensor_config);
         if (err != CONFIG_OK && (plat == HAL_PLATFORM_AK ||
              plat == HAL_PLATFORM_V1 || plat == HAL_PLATFORM_V2 ||
@@ -601,6 +696,24 @@ enum ConfigError app_config_parse(void) {
             &ini, "http_post", "qfactor", 1, 99, &app_config.http_post_qfactor);
         if (err != CONFIG_OK)
             goto RET_ERR;
+    }
+
+    if (app_config.source_type == APP_SOURCE_FH86) {
+        if (app_config.audio_enable || app_config.jpeg_enable ||
+            app_config.mjpeg_enable || app_config.osd_enable ||
+            app_config.night_mode_enable || app_config.http_post_enable) {
+            HAL_DANGER("app_config",
+                "FH86 external source currently supports encoded H.264 only; "
+                "audio/JPEG/MJPEG/OSD/night-mode/HTTP-post must be disabled.\n");
+            err = CONFIG_PARAM_INVALID_FORMAT;
+            goto RET_ERR;
+        }
+        if (app_config.mp4_enable && app_config.mp4_codecH265) {
+            HAL_DANGER("app_config",
+                "FH86 external source accepts H.264 only; configure MP4 codec H.264.\n");
+            err = CONFIG_PARAM_INVALID_FORMAT;
+            goto RET_ERR;
+        }
     }
 
     free(ini.str);

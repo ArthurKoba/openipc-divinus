@@ -6,7 +6,7 @@ bool jpeg_module_init = false;
 pthread_mutex_t jpeg_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int jpeg_init() {  
-    int ret;
+    int ret = EXIT_FAILURE;
 
     pthread_mutex_lock(&jpeg_mutex);
 
@@ -22,7 +22,7 @@ int jpeg_init() {
 
     jpeg_index = take_next_free_channel(false);
 
-    if (ret = create_channel(jpeg_index, app_config.jpeg_width, app_config.jpeg_height, 1, 1)) {
+    if ((ret = create_channel(jpeg_index, app_config.jpeg_width, app_config.jpeg_height, 1, 1))) {
         pthread_mutex_unlock(&jpeg_mutex);
         HAL_ERROR("jpeg", "Creating channel %d failed with %#x!\n%s\n", 
             jpeg_index, ret, errstr(ret));
@@ -113,7 +113,7 @@ int jpeg_get(short width, short height, char quality, char grayscale,
         pthread_mutex_unlock(&jpeg_mutex);
         HAL_ERROR("jpeg", "Module is not enabled!\n");
     }
-    int ret;
+    int ret = EXIT_FAILURE;
 
     switch (plat) {
  #if defined(__ARM_PCS_VFP)
@@ -133,6 +133,7 @@ int jpeg_get(short width, short height, char quality, char grayscale,
 #elif defined(__riscv) || defined(__riscv__)
         case HAL_PLATFORM_CVI: ret = cvi_video_snapshot_grab(jpeg_index, jpeg); break;
 #endif
+        default: break;
     }
     if (ret && jpeg->data) { 
         free(jpeg->data);

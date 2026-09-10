@@ -1,4 +1,5 @@
 #include "media.h"
+#include "hal/full/fh8626_hal.h"
 
 char audioOn = 0, udpOn = 0;
 pthread_mutex_t aencMtx, chnMtx, mp4Mtx;
@@ -235,6 +236,8 @@ int media_start(void) {
                 HAL_INFO("media", "Starting streaming to %s...\n", app_config.stream_dests[i]);
         }
     }
+
+    return ret;
 }
 
 void media_stop(void) {
@@ -246,6 +249,9 @@ void media_stop(void) {
 }
 
 void request_idr(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return;
+
     signed char index = -1;
     pthread_mutex_lock(&chnMtx);
     for (int i = 0; i < chnCount; i++) {
@@ -278,6 +284,9 @@ void request_idr(void) {
 }
 
 void set_grayscale(bool active) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return;
+
     pthread_mutex_lock(&chnMtx);
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
@@ -340,6 +349,8 @@ int create_channel(char index, short width, short height, char framerate, char j
             app_config.mirror, app_config.flip);
 #endif
     }
+
+    return EXIT_FAILURE;
 }
 
 int bind_channel(char index, char framerate, char jpeg) {
@@ -362,6 +373,8 @@ int bind_channel(char index, char framerate, char jpeg) {
         case HAL_PLATFORM_CVI: return cvi_channel_bind(index);
 #endif
     }
+
+    return EXIT_FAILURE;
 }
 
 int unbind_channel(char index, char jpeg) {
@@ -384,6 +397,8 @@ int unbind_channel(char index, char jpeg) {
         case HAL_PLATFORM_CVI: return cvi_channel_unbind(index);
 #endif
     }
+
+    return EXIT_FAILURE;
 }
 
 int media_video_disable(char index, char jpeg) {
@@ -440,6 +455,9 @@ void media_audio_disable(void) {
 }
 
 int media_audio_enable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_FAILURE;
+
     int ret = EXIT_SUCCESS;
 
     if (audioOn) return ret;
@@ -523,6 +541,9 @@ int media_audio_enable(void) {
 }
 
 int media_mjpeg_disable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_SUCCESS;
+
     int ret;
 
     for (char i = 0; i < chnCount; i++) {
@@ -542,6 +563,9 @@ int media_mjpeg_disable(void) {
 }
 
 int media_mjpeg_enable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_FAILURE;
+
     int ret;
 
     int index = take_next_free_channel(true);
@@ -594,6 +618,9 @@ int media_mjpeg_enable(void) {
 }
 
 int media_mp4_disable(void) {
+    if (app_config.source_type == APP_SOURCE_FH86)
+        return EXIT_SUCCESS;
+
     int ret;
 
     for (char i = 0; i < chnCount; i++) {
@@ -615,6 +642,15 @@ int media_mp4_disable(void) {
 
 int media_mp4_enable(void) {
     int ret;
+
+    if (app_config.source_type == APP_SOURCE_FH86) {
+        if (app_config.mp4_codecH265)
+            return EXIT_FAILURE;
+
+        mp4_set_config(app_config.mp4_width, app_config.mp4_height,
+            app_config.mp4_fps, HAL_AUDCODEC_UNSPEC, 0, 1, 0);
+        return EXIT_SUCCESS;
+    }
 
     int index = take_next_free_channel(true);
 
@@ -673,7 +709,15 @@ int media_mp4_enable(void) {
 }
 
 int sdk_start(void) {
-    int ret;
+    int ret = EXIT_FAILURE;
+
+    if (plat == HAL_PLATFORM_FH8626) {
+        ret = fh8626_sdk_start(save_video_stream);
+        if (ret)
+            HAL_ERROR("media", "FH8626 native SDK startup failed with %#x!\n", ret);
+        HAL_INFO("media", "FH8626 native SDK has started successfully!\n");
+        return EXIT_SUCCESS;
+    }
 
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
@@ -874,6 +918,14 @@ int sdk_start(void) {
 }
 
 int sdk_stop(void) {
+    if (plat == HAL_PLATFORM_FH8626) {
+        int ret = fh8626_sdk_stop();
+        if (ret)
+            HAL_ERROR("media", "FH8626 native SDK shutdown failed with %#x!\n", ret);
+        HAL_INFO("media", "FH8626 native SDK had stopped successfully!\n");
+        return EXIT_SUCCESS;
+    }
+
     pthread_join(vidPid, NULL);
 
     if (app_config.jpeg_enable)

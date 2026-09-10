@@ -60,16 +60,24 @@ void region_fill_formatted(char* str) {
             char tmp[6];
             unsigned int cpu[6];
             FILE *stat = fopen("/proc/stat", "r");
-            fscanf(stat, "%s %u %u %u %u %u %u",
-                tmp, &cpu[0], &cpu[1], &cpu[2], &cpu[3], &cpu[4], &cpu[5]);
+            if (!stat)
+                continue;
+            if (fscanf(stat, "%5s %u %u %u %u %u %u",
+                    tmp, &cpu[0], &cpu[1], &cpu[2], &cpu[3], &cpu[4], &cpu[5]) != 7) {
+                fclose(stat);
+                continue;
+            }
             fclose(stat);
 
-            char c[5];
-            char avg = 100 - (cpu[3] - cpu_l[3]) / sysconf(_SC_NPROCESSORS_ONLN);
-            sprintf(c, "%d%%", avg);
+            char c[16];
+            long cpu_count = sysconf(_SC_NPROCESSORS_ONLN);
+            if (cpu_count < 1)
+                cpu_count = 1;
+            int avg = 100 - (int)((cpu[3] - cpu_l[3]) / (unsigned long)cpu_count);
+            snprintf(c, sizeof(c), "%d%%", avg);
             strcat(out, c);
             opos += strlen(c);
-            for (int i = 0; i < sizeof(cpu) / sizeof(cpu[0]); i++)
+            for (size_t i = 0; i < sizeof(cpu) / sizeof(cpu[0]); i++)
                 cpu_l[i] = cpu[i];
         }
         else if (str[ipos + 1] == 'M')
@@ -148,7 +156,7 @@ int region_parse_bitmap(FILE **file, bitmapfile *bmpFile, bitmapinfo *bmpInfo) {
 
 int region_prepare_image(char *path, hal_bitmap *bitmap) {
     FILE *file;
-    unsigned char *bitmapdata, *bitmapout;
+    unsigned char *bitmapdata = NULL, *bitmapout = NULL;
     unsigned short *dest;
 
     if (!path)
@@ -200,21 +208,24 @@ int region_prepare_image(char *path, hal_bitmap *bitmap) {
 
     bitmapdata = malloc(bitmapsize);
     if (!bitmapdata) {
-        HAL_DANGER("server", "Allocating the PNG bitmap input buffer for size %u failed!\n", bitmapsize);
+        HAL_DANGER("server", "Allocating the PNG bitmap input buffer for size %zu failed!\n", bitmapsize);
         goto png_error;
     }
 
     bitmapout = malloc(bitmapsize / 2);
     if (!bitmapout) {
-        HAL_DANGER("server", "Allocating the PNG bitmap output buffer for size %u failed!\n", bitmapsize / 2);
+        HAL_DANGER("server", "Allocating the PNG bitmap output buffer for size %zu failed!\n", bitmapsize / 2);
         goto png_error;
     }
 
     err = spng_decode_image(ctx, bitmapdata, bitmapsize, SPNG_FMT_RGBA8, 0);
-    if (!bitmapdata) {
+    if (err) {
         HAL_DANGER("server", "Decoding the PNG image failed!\nError: %s\n", spng_strerror(err));
         goto png_error;
     }
+
+    spng_ctx_free(ctx);
+    ctx = NULL;
 
     dest = (unsigned short*)bitmapout;
     for (int i = 0; i < bitmapsize; i += 4) {
@@ -228,7 +239,7 @@ int region_prepare_image(char *path, hal_bitmap *bitmap) {
 
     bitmap->data = bitmapout;
     bitmap->dim.width = ihdr.width;
-    bitmap->dim.height = abs(ihdr.height);
+    bitmap->dim.height = ihdr.height;
 
     return EXIT_SUCCESS;
 
@@ -326,7 +337,8 @@ int region_prepare_bitmap(char *path, hal_bitmap *bitmap) {
     return EXIT_SUCCESS;
 }
 
-void *region_thread(void) {
+void *region_thread(void *arg) {
+    (void)arg;
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
         case HAL_PLATFORM_I6:  i6_region_init(); break;
@@ -533,6 +545,8 @@ found_font:;
         case HAL_PLATFORM_M6:  m6_region_deinit(); break;
 #endif
     }
+
+    return NULL;
 }
 
 int region_start() {
@@ -543,12 +557,18 @@ int region_start() {
     size_t new_stacksize = 320 * 1024;
     if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
         HAL_DANGER("region", "Can't set stack size %zu\n", new_stacksize);
-    if (pthread_create(
-            &regionPid, &thread_attr, (void *(*)(void *))region_thread, NULL))
-        HAL_DANGER("region", "Starting the handler thread failed!\n");
+    int ret = pthread_create(&regionPid, &thread_attr, region_thread, NULL);
     if (pthread_attr_setstacksize(&thread_attr, stacksize))
         HAL_DANGER("region", "Can't set stack size %zu\n", stacksize);
     pthread_attr_destroy(&thread_attr);
+
+    if (ret) {
+        HAL_DANGER("region", "Starting the handler thread failed: %s\n",
+            strerror(ret));
+        return EXIT_FAILURE;
+    }
+
+    return EXIT_SUCCESS;
 }
 
 void region_stop() {

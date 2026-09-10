@@ -192,7 +192,7 @@ void send_h26x_to_client(char index, hal_vidstream *stream) {
                     continue;
 
                 char len_buf[16];
-                int len_size = sprintf(len_buf, "%zX\r\n", pack->nalu[j].length);
+                int len_size = snprintf(len_buf, sizeof(len_buf), "%X\r\n", pack->nalu[j].length);
 
                 struct iovec iov[3];
                 iov[0].iov_base = len_buf;
@@ -252,7 +252,7 @@ void send_mp4_to_client(char index, hal_vidstream *stream, char isH265) {
                 struct BitBuf header_buf;
                 err = mp4_get_header(&header_buf);
                 chk_err_continue ssize_t len_size =
-                    sprintf(len_buf, "%zX\r\n", header_buf.offset);
+                    snprintf(len_buf, sizeof(len_buf), "%X\r\n", header_buf.offset);
                 if (send_to_client(i, len_buf, len_size) < 0)
                     continue;
                 if (send_to_client(i, header_buf.buf, header_buf.offset) < 0)
@@ -334,7 +334,7 @@ void send_pcm_to_client(hal_audframe *frame) {
         if (client_fds[i].type != STREAM_PCM) continue;
 
         char len_buf[50];
-        ssize_t len_size = sprintf(len_buf, "%zX\r\n", frame->length[0]);
+        ssize_t len_size = snprintf(len_buf, sizeof(len_buf), "%X\r\n", frame->length[0]);
         if (send_to_client(i, len_buf, len_size) < 0)
             continue; // send <SIZE>\r\n
         if (send_to_client(i, frame->data[0], frame->length[0]) < 0)
@@ -373,7 +373,7 @@ void send_jpeg_to_client(char index, char *buf, ssize_t size) {
         prefix_buf,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: image/jpeg\r\n"
-        "Content-Length: %lu\r\n"
+        "Content-Length: %zd\r\n"
         "Connection: close\r\n\r\n", size);
     buf[size++] = '\r';
     buf[size++] = '\n';
@@ -421,7 +421,7 @@ void *send_jpeg_thread(void *vargp) {
     int buf_len = sprintf(
         buf, "HTTP/1.1 200 OK\r\n"
         "Content-Type: image/jpeg\r\n"
-        "Content-Length: %lu\r\n"
+        "Content-Length: %u\r\n"
         "Connection: close\r\n\r\n",
         jpeg.jpegSize);
     send_to_fd(task->client_fd, buf, buf_len);

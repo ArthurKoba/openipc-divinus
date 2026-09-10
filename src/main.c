@@ -6,6 +6,7 @@
 #include "night.h"
 #include "rtsp/rtsp_server.h"
 #include "server.h"
+#include "source/fh86_divinus.h"
 #include "watchdog.h"
 
 #include <getopt.h>
@@ -21,18 +22,22 @@ char graceful = 0, keepRunning = 1;
 void handle_error(int signo) {
     char msg[64];
     sprintf(msg, "Error occured (%d)! Quitting...\n", signo);
-    write(STDERR_FILENO, msg, strlen(msg));
+    ssize_t ignored = write(STDERR_FILENO, msg, strlen(msg));
+    (void)ignored;
     keepRunning = 0;
     exit(EXIT_FAILURE);
 }
 
 void handle_exit(int signo) {
-    write(STDERR_FILENO, "Graceful shutdown...\n", 21);
+    ssize_t ignored = write(STDERR_FILENO, "Graceful shutdown...\n", 21);
+    (void)ignored;
     keepRunning = 0;
     graceful = 1;
 }
 
 int main(int argc, char *argv[]) {
+    enum AppSourceType source_type;
+
     {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
@@ -53,13 +58,23 @@ int main(int argc, char *argv[]) {
         sigaction(SIGPIPE, &sa, NULL);
     }
 
-    hal_identify();
+    if (app_config_probe_source(&source_type) != CONFIG_OK)
+        HAL_ERROR("app_config", "Can't determine source type from 'divinus.yaml'\n");
 
-    if (!*family)
-        HAL_ERROR("hal", "Unsupported chip family! Quitting...\n");
+    if (source_type == APP_SOURCE_SDK) {
+        hal_identify();
 
-    fprintf(stderr, "\033[0m\033[7m Divinus (rev %s) for %s \033[0m\n", GIT_REV, family);
-    fprintf(stderr, "Chip ID: %s\n", chip);
+        if (!*family)
+            HAL_ERROR("hal", "Unsupported chip family! Quitting...\n");
+
+        fprintf(stderr, "\033[0m\033[7m Divinus (rev %s) for %s \033[0m\n",
+            GIT_REV, family);
+        fprintf(stderr, "Chip ID: %s\n", chip);
+    } else {
+        fprintf(stderr,
+            "\033[0m\033[7m Divinus (rev %s) with external FH86 source \033[0m\n",
+            GIT_REV);
+    }
 
     if (app_config_parse() != CONFIG_OK)
         HAL_ERROR("hal", "Can't load app config 'divinus.yaml'\n");
@@ -73,6 +88,8 @@ int main(int argc, char *argv[]) {
 
     if (app_config.rtsp_enable) {
         rtspHandle = rtsp_create(RTSP_MAXIMUM_CONNECTIONS, app_config.rtsp_port, 1);
+        if (!rtspHandle)
+            HAL_ERROR("rtsp", "Failed to start RTSP server!\n");
         HAL_INFO("rtsp", "Started listening for clients...\n");
         if (app_config.rtsp_enable_auth) {
             if (EMPTY(app_config.rtsp_auth_user) || EMPTY(app_config.rtsp_auth_pass))
@@ -87,7 +104,10 @@ int main(int argc, char *argv[]) {
     if (app_config.stream_enable)
         media_start();
 
-    if (sdk_start())
+    if (app_config.source_type == APP_SOURCE_FH86) {
+        if (fh86_divinus_start())
+            HAL_ERROR("fh86_source", "Failed to start external source!\n");
+    } else if (sdk_start())
         HAL_ERROR("hal", "Failed to start SDK!\n");
 
     if (app_config.night_mode_enable)
@@ -120,7 +140,10 @@ int main(int argc, char *argv[]) {
     if (app_config.night_mode_enable)
         night_disable();
 
-    sdk_stop();
+    if (app_config.source_type == APP_SOURCE_FH86)
+        fh86_divinus_stop();
+    else
+        sdk_stop();
 
     if (app_config.stream_enable)
         media_stop();
