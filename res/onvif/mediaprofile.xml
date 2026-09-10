@@ -21,4 +21,12 @@
             <tt:BitrateLimit>%d</tt:BitrateLimit>
           </tt:RateControl>
         </tt:VideoEncoderConfiguration>
+        <tt:PTZConfiguration token="fh8626-config">
+          <tt:Name>FH8626 PTZ</tt:Name>
+          <tt:UseCount>1</tt:UseCount>
+          <tt:NodeToken>fh8626</tt:NodeToken>
+          <tt:DefaultRelativePanTiltTranslationSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov</tt:DefaultRelativePanTiltTranslationSpace>
+          <tt:DefaultContinuousPanTiltVelocitySpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:DefaultContinuousPanTiltVelocitySpace>
+          <tt:DefaultPTZTimeout>PT5S</tt:DefaultPTZTimeout>
+        </tt:PTZConfiguration>
       </trt:Profiles>

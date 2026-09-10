@@ -59,8 +59,8 @@
           <tt:XAddr>http://%s:%d/onvif/media_service</tt:XAddr>
           <tt:StreamingCapabilities>
             <tt:RTPMulticast>false</tt:RTPMulticast>
-            <tt:RTP_TCP>false</tt:RTP_TCP>
-            <tt:RTP_RTSP_TCP>false</tt:RTP_RTSP_TCP>
+            <tt:RTP_TCP>true</tt:RTP_TCP>
+            <tt:RTP_RTSP_TCP>true</tt:RTP_RTSP_TCP>
           </tt:StreamingCapabilities>
           <tt:ProfileCapabilities>
             <tt:MaximumNumberOfProfiles>2</tt:MaximumNumberOfProfiles>

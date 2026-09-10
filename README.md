@@ -82,7 +82,7 @@ _* At the moment, text, RGB or bitfield bitmaps and PNG overlays are handled, mo
 
 - [ ] Audio source, input gain and output volume
 - [ ] ONVIF write support, enhanced compatiblity
-- [ ] Motors and PTZ control
+- [x] FH8626V100 motor and PTZ control (REST, WebUI and ONVIF)
 - [ ] Lens correction profiles
 - [ ] Motion detection
 - [ ] Alternative audio codecs

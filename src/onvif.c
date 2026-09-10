@@ -1,4 +1,8 @@
 #include "onvif.h"
+#include "ptz.h"
+
+#include <math.h>
+#include <stdarg.h>
 
 IMPORT_STR(.rodata, "../res/onvif/capabilities.xml", capabilitiesxml);
 extern const char capabilitiesxml[];
@@ -148,7 +152,7 @@ void *onvif_thread(void *arg) {
 
 char* onvif_extract_soap_action(const char* soap_data) {
     static char action[128];
-    char *action_start = NULL;
+    char *action_end;
     
     char *body_start = strstr(soap_data, "Body");
     if (!body_start) return NULL;
@@ -161,16 +165,20 @@ char* onvif_extract_soap_action(const char* soap_data) {
     
     if (*body_start != '<') return NULL;
     body_start++;
-    
-    char *action_end = strchr(body_start, ' ');
-    if (!action_end) action_end = strchr(body_start, '>');
-    if (!action_end) return NULL;
+
+    action_end = body_start;
+    while (*action_end && !isspace((unsigned char)*action_end) &&
+           *action_end != '>' && *action_end != '/') action_end++;
+    if (action_end == body_start || !*action_end) return NULL;
     
     int action_len = action_end - body_start;
     if (action_len >= sizeof(action)) action_len = sizeof(action) - 1;
     
     strncpy(action, body_start, action_len);
     action[action_len] = '\0';
+    char *namespace = strrchr(action, ':');
+    if (namespace)
+        memmove(action, namespace + 1, strlen(namespace + 1) + 1);
     
     return action;
 }
@@ -307,7 +315,7 @@ void onvif_respond_mediaprofiles(char *response, int *respLen) {
 
     if (app_config.mp4_enable) {
         profileLen += sprintf(&profile[profileLen], mediaprofilexml,
-            "MainStream", "profile_1",
+            "profile_1", "MainStream",
             profileCnt + 1, profileCnt + 1,
             app_config.mp4_height, app_config.mp4_width,
             profileCnt + 1, profileCnt + 1,
@@ -319,7 +327,7 @@ void onvif_respond_mediaprofiles(char *response, int *respLen) {
 
     if (app_config.mjpeg_enable) {
         profileLen += sprintf(&profile[profileLen], mediaprofilexml,
-            "SubStream", "profile_2",
+            "profile_2", "SubStream",
             profileCnt + 1, profileCnt + 1,
             app_config.mjpeg_height, app_config.mjpeg_width,
             profileCnt + 1, profileCnt + 1,
@@ -374,10 +382,10 @@ void onvif_respond_stream(char *response, int *respLen) {
         char user[96], pass[96];
         escape_url(user, app_config.rtsp_auth_user, sizeof(user));
         escape_url(pass, app_config.rtsp_auth_pass, sizeof(pass));
-        snprintf(stream_url, sizeof(stream_url), "rtsp://%s:%s@%s:%d/",
+        snprintf(stream_url, sizeof(stream_url), "rtsp://%s:%s@%s:%d/stream=0",
             user, pass, netinfo.ipaddr[0], app_config.rtsp_port);
     } else
-        snprintf(stream_url, sizeof(stream_url), "rtsp://%s:%d/",
+        snprintf(stream_url, sizeof(stream_url), "rtsp://%s:%d/stream=0",
             netinfo.ipaddr[0], app_config.rtsp_port);
 
     int maxLen = *respLen;
@@ -428,4 +436,306 @@ void onvif_respond_videosources(char *response, int *respLen) {
     *respLen += snprintf(response + headerLen, maxLen - headerLen,
         videosourcesxml,
         framerate, width, height);
+}
+
+static int onvif_soap_write(char *response, int *respLen, const char *format, ...) {
+    va_list args;
+    int header_len, body_len;
+
+    if (!response || !respLen || *respLen <= 0 || !format) return -EINVAL;
+    header_len = (int)strlen(onvifgood);
+    if (header_len >= *respLen) return -EOVERFLOW;
+    memcpy(response, onvifgood, (size_t)header_len);
+    va_start(args, format);
+    body_len = vsnprintf(response + header_len, (size_t)(*respLen - header_len),
+        format, args);
+    va_end(args);
+    if (body_len < 0 || body_len >= *respLen - header_len) return -EOVERFLOW;
+    *respLen = header_len + body_len;
+    return 0;
+}
+
+static int onvif_xml_attribute(const char *payload, const char *element,
+    const char *attribute, double *value) {
+    const char *start, *end, *found, *number;
+    char pattern[32], quote, *tail;
+    double parsed;
+
+    if (!payload || !element || !attribute || !value) return -EINVAL;
+    start = strstr(payload, element);
+    if (!start || !(end = strchr(start, '>'))) return -EINVAL;
+    snprintf(pattern, sizeof(pattern), "%s=", attribute);
+    found = strstr(start, pattern);
+    if (!found || found >= end) return -EINVAL;
+    number = found + strlen(pattern);
+    quote = *number;
+    if (quote != '\'' && quote != '"') return -EINVAL;
+    errno = 0;
+    parsed = strtod(number + 1, &tail);
+    if (errno || tail == number + 1 || *tail != quote || tail >= end)
+        return -EINVAL;
+    *value = parsed;
+    return 0;
+}
+
+static int onvif_xml_text(const char *payload, const char *element,
+    char *value, size_t value_size) {
+    const char *cursor;
+    size_t element_len;
+
+    if (!payload || !element || !value || value_size < 2) return -EINVAL;
+    element_len = strlen(element);
+    cursor = payload;
+    while ((cursor = strchr(cursor, '<'))) {
+        const char *name = cursor + 1, *open_end, *text_end, *local;
+        size_t text_len;
+
+        if (*name == '/') { cursor = name + 1; continue; }
+        open_end = strchr(name, '>');
+        if (!open_end) return -EINVAL;
+        local = name;
+        for (const char *scan = name; scan < open_end; ++scan) {
+            if (*scan == ':') local = scan + 1;
+            if (*scan == ' ' || *scan == '\t' || *scan == '\r' || *scan == '\n')
+                break;
+        }
+        if (!strncmp(local, element, element_len) &&
+            (local[element_len] == '>' || local[element_len] == ' ' ||
+             local[element_len] == '\t' || local[element_len] == '\r' ||
+             local[element_len] == '\n')) {
+            text_end = strchr(open_end + 1, '<');
+            if (!text_end) return -EINVAL;
+            text_len = (size_t)(text_end - (open_end + 1));
+            if (!text_len || text_len >= value_size) return -EINVAL;
+            memcpy(value, open_end + 1, text_len);
+            value[text_len] = '\0';
+            return 0;
+        }
+        cursor = open_end + 1;
+    }
+    return -ENOENT;
+}
+
+static int onvif_ptz_fault(char *response, int *respLen, int error) {
+    return onvif_soap_write(response, respLen,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\">"
+        "<s:Body><s:Fault><s:Code><s:Value>s:Receiver</s:Value></s:Code>"
+        "<s:Reason><s:Text xml:lang=\"en\">PTZ backend error %d</s:Text>"
+        "</s:Reason></s:Fault></s:Body></s:Envelope>", -error);
+}
+
+static int onvif_ptz_empty(char *response, int *respLen, const char *action) {
+    return onvif_soap_write(response, respLen,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+        "xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\">"
+        "<s:Body><tptz:%sResponse/></s:Body></s:Envelope>", action);
+}
+
+static double onvif_normalize(int value, int minimum, int maximum) {
+    if (maximum <= minimum) return 0.0;
+    return ((double)(value - minimum) * 2.0 / (double)(maximum - minimum)) - 1.0;
+}
+
+static int onvif_denormalize(double value, int minimum, int maximum) {
+    double bounded = value < -1.0 ? -1.0 : value > 1.0 ? 1.0 : value;
+    return minimum + (int)lround((bounded + 1.0) * (maximum - minimum) / 2.0);
+}
+
+static int onvif_clamp_target(int value, int minimum, int maximum) {
+    return value < minimum ? minimum : value > maximum ? maximum : value;
+}
+
+/*
+ * TranslationSpaceFov is a view-relative request, not a request to traverse
+ * the complete mechanical axis.  Keep one normalized FOV unit aligned with
+ * the existing PTZ velocity scale; mapping it to the whole raw range makes
+ * Frigate calibration take ~13 s at x/y=1 and violates its <=2 s/unit model.
+ */
+#define ONVIF_FOV_PAN_STEPS 64
+#define ONVIF_FOV_TILT_STEPS 24
+
+int onvif_respond_ptz(const char *action, const char *payload,
+    char *response, int *respLen) {
+    struct ptz_status status;
+    int rc;
+
+    if (!action || !response || !respLen) return 0;
+    if (EQUALS(action, "GetServiceCapabilities")) {
+        onvif_soap_write(response, respLen,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\">"
+            "<s:Body><tptz:GetServiceCapabilitiesResponse>"
+            "<tptz:Capabilities EFlip=\"false\" Reverse=\"false\" "
+            "GetCompatibleConfigurations=\"true\" MoveStatus=\"true\" "
+            "StatusPosition=\"true\"/></tptz:GetServiceCapabilitiesResponse>"
+            "</s:Body></s:Envelope>");
+        return 1;
+    }
+    if (EQUALS(action, "GetNodes")) {
+        onvif_soap_write(response, respLen,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\" "
+            "xmlns:tt=\"http://www.onvif.org/ver10/schema\">"
+            "<s:Body><tptz:GetNodesResponse><tptz:PTZNode token=\"fh8626\">"
+            "<tt:Name>FH8626 PTZ</tt:Name><tt:SupportedPTZSpaces>"
+            "<tt:AbsolutePanTiltPositionSpace><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:AbsolutePanTiltPositionSpace>"
+            "<tt:RelativePanTiltTranslationSpace><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov</tt:URI><tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>"
+            "<tt:ContinuousPanTiltVelocitySpace><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:URI><tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:ContinuousPanTiltVelocitySpace>"
+            "</tt:SupportedPTZSpaces><tt:MaximumNumberOfPresets>8</tt:MaximumNumberOfPresets><tt:HomeSupported>true</tt:HomeSupported>"
+            "</tptz:PTZNode></tptz:GetNodesResponse></s:Body></s:Envelope>");
+        return 1;
+    }
+    if (EQUALS(action, "GetConfigurations") || EQUALS(action, "GetConfiguration") ||
+        EQUALS(action, "GetCompatibleConfigurations")) {
+        const char *name = EQUALS(action, "GetConfigurations") ? "GetConfigurations" :
+            EQUALS(action, "GetConfiguration") ? "GetConfiguration" :
+            "GetCompatibleConfigurations";
+        onvif_soap_write(response, respLen,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\" xmlns:tt=\"http://www.onvif.org/ver10/schema\">"
+            "<s:Body><tptz:%sResponse><tptz:PTZConfiguration token=\"fh8626-config\"><tt:Name>FH8626 PTZ</tt:Name><tt:UseCount>1</tt:UseCount><tt:NodeToken>fh8626</tt:NodeToken><tt:DefaultRelativePanTiltTranslationSpace>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov</tt:DefaultRelativePanTiltTranslationSpace><tt:DefaultPTZTimeout>PT5S</tt:DefaultPTZTimeout></tptz:PTZConfiguration></tptz:%sResponse></s:Body></s:Envelope>",
+            name, name);
+        return 1;
+    }
+    if (EQUALS(action, "GetConfigurationOptions")) {
+        onvif_soap_write(response, respLen,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\" xmlns:tt=\"http://www.onvif.org/ver10/schema\">"
+            "<s:Body><tptz:GetConfigurationOptionsResponse><tptz:PTZConfigurationOptions><tt:Spaces>"
+            "<tt:AbsolutePanTiltPositionSpace><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace</tt:URI><tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:AbsolutePanTiltPositionSpace>"
+            "<tt:RelativePanTiltTranslationSpace><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationSpaceFov</tt:URI><tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:RelativePanTiltTranslationSpace>"
+            "<tt:ContinuousPanTiltVelocitySpace><tt:URI>http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace</tt:URI><tt:XRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:XRange><tt:YRange><tt:Min>-1</tt:Min><tt:Max>1</tt:Max></tt:YRange></tt:ContinuousPanTiltVelocitySpace>"
+            "</tt:Spaces><tt:PTZTimeout><tt:Min>PT0.1S</tt:Min><tt:Max>PT30S</tt:Max></tt:PTZTimeout></tptz:PTZConfigurationOptions></tptz:GetConfigurationOptionsResponse></s:Body></s:Envelope>");
+        return 1;
+    }
+    rc = ptz_status_read(&status);
+    if (rc) {
+        onvif_ptz_fault(response, respLen, rc);
+        return 1;
+    }
+    if (EQUALS(action, "GetStatus")) {
+        onvif_soap_write(response, respLen,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\" xmlns:tt=\"http://www.onvif.org/ver10/schema\">"
+            "<s:Body><tptz:GetStatusResponse><tptz:PTZStatus><tt:Position><tt:PanTilt x=\"%.6f\" y=\"%.6f\" space=\"http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace\"/></tt:Position>"
+            "<tt:MoveStatus><tt:PanTilt>%s</tt:PanTilt></tt:MoveStatus><tt:Error></tt:Error></tptz:PTZStatus></tptz:GetStatusResponse></s:Body></s:Envelope>",
+            onvif_normalize(status.pan, status.pan_min, status.pan_max),
+            onvif_normalize(status.tilt, status.tilt_min, status.tilt_max),
+            status.busy ? "MOVING" : "IDLE");
+        return 1;
+    }
+    if (EQUALS(action, "GetPresets")) {
+        struct ptz_preset presets[PTZ_MAX_PRESETS];
+        char entries[2048];
+        size_t used = 0;
+        int count = ptz_presets_read(presets, PTZ_MAX_PRESETS);
+
+        if (count < 0) rc = count;
+        else {
+            entries[0] = '\0';
+            for (int index = 0; index < count; ++index) {
+                int length = snprintf(entries + used, sizeof(entries) - used,
+                    "<tptz:Preset token=\"%s\"><tt:Name>%s</tt:Name>"
+                    "<tt:PTZPosition><tt:PanTilt x=\"%.6f\" y=\"%.6f\" "
+                    "space=\"http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace\"/>"
+                    "</tt:PTZPosition></tptz:Preset>",
+                    presets[index].token, presets[index].token,
+                    onvif_normalize(presets[index].pan, status.pan_min, status.pan_max),
+                    onvif_normalize(presets[index].tilt, status.tilt_min, status.tilt_max));
+                if (length < 0 || (size_t)length >= sizeof(entries) - used) {
+                    rc = -EOVERFLOW;
+                    break;
+                }
+                used += (size_t)length;
+            }
+        }
+        if (rc) onvif_ptz_fault(response, respLen, rc);
+        else onvif_soap_write(response, respLen,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\" "
+            "xmlns:tt=\"http://www.onvif.org/ver10/schema\">"
+            "<s:Body><tptz:GetPresetsResponse>%s</tptz:GetPresetsResponse>"
+            "</s:Body></s:Envelope>", entries);
+        return 1;
+    }
+    if (EQUALS(action, "SetPreset")) {
+        char requested[32] = "", token[32];
+        int token_rc = onvif_xml_text(payload, "PresetToken", requested,
+            sizeof(requested));
+        if (token_rc == -ENOENT)
+            token_rc = onvif_xml_text(payload, "PresetName", requested,
+                sizeof(requested));
+        rc = ptz_preset_set(token_rc ? NULL : requested, token, sizeof(token));
+        if (rc) onvif_ptz_fault(response, respLen, rc);
+        else onvif_soap_write(response, respLen,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+            "<s:Envelope xmlns:s=\"http://www.w3.org/2003/05/soap-envelope\" "
+            "xmlns:tptz=\"http://www.onvif.org/ver20/ptz/wsdl\">"
+            "<s:Body><tptz:SetPresetResponse><tptz:PresetToken>%s"
+            "</tptz:PresetToken></tptz:SetPresetResponse></s:Body></s:Envelope>", token);
+        return 1;
+    }
+    if (EQUALS(action, "GotoPreset") || EQUALS(action, "RemovePreset")) {
+        char token[32];
+        rc = onvif_xml_text(payload, "PresetToken", token, sizeof(token));
+        if (!rc) rc = EQUALS(action, "GotoPreset") ?
+            ptz_preset_goto(token) : ptz_preset_remove(token);
+        if (rc) onvif_ptz_fault(response, respLen, rc);
+        else onvif_ptz_empty(response, respLen, action);
+        return 1;
+    }
+    if (EQUALS(action, "GotoHomePosition")) rc = ptz_home();
+    else if (EQUALS(action, "AbsoluteMove")) {
+        double pan, tilt;
+        if (onvif_xml_attribute(payload, "PanTilt", "x", &pan) ||
+            onvif_xml_attribute(payload, "PanTilt", "y", &tilt)) rc = -EINVAL;
+        else rc = ptz_move_absolute(
+            onvif_denormalize(pan, status.pan_min, status.pan_max),
+            onvif_denormalize(tilt, status.tilt_min, status.tilt_max));
+    } else if (EQUALS(action, "RelativeMove")) {
+        double pan, tilt;
+        if (onvif_xml_attribute(payload, "PanTilt", "x", &pan) ||
+            onvif_xml_attribute(payload, "PanTilt", "y", &tilt)) rc = -EINVAL;
+        else if (!isfinite(pan) || !isfinite(tilt) ||
+            status.pan < status.pan_min || status.pan > status.pan_max ||
+            status.tilt < status.tilt_min || status.tilt > status.tilt_max)
+            rc = -ERANGE;
+        else {
+            int requested_pan = (int)lround(pan * ONVIF_FOV_PAN_STEPS);
+            int requested_tilt = (int)lround(tilt * ONVIF_FOV_TILT_STEPS);
+            int target_pan = onvif_clamp_target(status.pan + requested_pan,
+                status.pan_min, status.pan_max);
+            int target_tilt = onvif_clamp_target(status.tilt + requested_tilt,
+                status.tilt_min, status.tilt_max);
+            int actual_pan = target_pan - status.pan;
+            int actual_tilt = target_tilt - status.tilt;
+
+            fprintf(stderr,
+                "ONVIF RelativeMove norm=(%.6f,%.6f) state=(busy=%d calibrated=%d pan=%d[%d,%d] tilt=%d[%d,%d]) target=(%d,%d) delta=(%d,%d)\n",
+                pan, tilt, status.busy, status.calibrated, status.pan,
+                status.pan_min, status.pan_max, status.tilt, status.tilt_min,
+                status.tilt_max, target_pan, target_tilt, actual_pan,
+                actual_tilt);
+            if (status.busy) rc = -EBUSY;
+            else if (!actual_pan && !actual_tilt) rc = 0;
+            else rc = ptz_move_relative(actual_pan, actual_tilt);
+            if (rc)
+                fprintf(stderr, "ONVIF RelativeMove backend rc=%d\n", rc);
+        }
+    } else if (EQUALS(action, "ContinuousMove")) {
+        double pan, tilt;
+        if (onvif_xml_attribute(payload, "PanTilt", "x", &pan) ||
+            onvif_xml_attribute(payload, "PanTilt", "y", &tilt)) rc = -EINVAL;
+        else rc = ptz_move_relative((int)lround(pan * 64.0),
+            (int)lround(tilt * 24.0));
+    } else if (EQUALS(action, "Stop")) rc = 0;
+    else return 0;
+    if (rc) onvif_ptz_fault(response, respLen, rc);
+    else onvif_ptz_empty(response, respLen, action);
+    return 1;
 }

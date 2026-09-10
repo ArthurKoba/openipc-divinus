@@ -14,6 +14,7 @@
 #include "thread.h"
 #include "rfc.h"
 #include "rtp.h"
+#include "rtp_au.h"
 #include "rtcp.h"
 #include "bufpool.h"
 #include "mime.h"
@@ -25,7 +26,7 @@
 static inline int __rtp_send(struct nal_rtp_t *rtp, struct list_head_t *trans_list);
 static inline int __rtp_send_eachconnection(struct list_t *e, void *v);
 static inline int __rtp_setup_transfer(struct list_t *e, void *v);
-static inline int __transfer_nal_h26x(struct list_head_t *trans_list, unsigned char *nalptr, size_t nalsize, char isH265);
+static inline int __transfer_nal_h26x(struct list_head_t *trans_list, unsigned char *nalptr, size_t nalsize, char isH265, int end_au);
 static inline int __transfer_nal_mpga(struct list_head_t *trans_list, unsigned char *ptr, size_t size);
 static inline int __retrieve_sprop(rtsp_handle h, unsigned char *buf, size_t len);
 
@@ -33,14 +34,16 @@ struct __transfer_set_t {
     struct list_head_t list_head;
     rtsp_handle h;
     int track_id;
+    unsigned int timestamp;
 };
 
 /******************************************************************************
  *              PRIVATE FUNCTIONS
  ******************************************************************************/
 
-static inline int __transfer_nal_h26x(struct list_head_t *trans_list, unsigned char *nalptr, size_t nalsize, char isH265)
+static inline int __transfer_nal_h26x(struct list_head_t *trans_list, unsigned char *nalptr, size_t nalsize, char isH265, int end_au)
 {
+    if (!nalptr || nalsize < (isH265 ? 2u : 1u)) return FAILURE;
     struct nal_rtp_t rtp;
     unsigned int nri = isH265 ? (nalptr[0] & 0x81) : (nalptr[0] & 0x60);
     unsigned int pt  = isH265 ? (nalptr[0] >> 1 & 0x3F) : (nalptr[0] & 0x1F);
@@ -56,20 +59,9 @@ static inline int __transfer_nal_h26x(struct list_head_t *trans_list, unsigned c
     p_header->cc = 0;
     p_header->pt = 96 & 0x7F;
 
-    if (nalsize < 4) return SUCCESS;
-
     if (nalsize <= __RTP_MAXPAYLOADSIZE) {
         /* single packet */
-        /* SPS, PPS, SEI is not marked */
-        if ((isH265 && pt < H265_NAL_TYPE_VPS) ||
-            (!isH265 &&
-                pt != H264_NAL_TYPE_SPS && 
-                pt != H264_NAL_TYPE_PPS &&
-                pt != H264_NAL_TYPE_SEI)) { 
-            p_header->m = 1;
-        } else {
-            p_header->m = 0;
-        }
+        p_header->m = !!end_au;
 
         memcpy(payload, nalptr, nalsize);
 
@@ -110,7 +102,7 @@ static inline int __transfer_nal_h26x(struct list_head_t *trans_list, unsigned c
         }
 
         /* send trailing nal */
-        p_header->m = 1;
+        p_header->m = !!end_au;
 
         payload[head - 1] |= 1 << 6;
 
@@ -166,8 +158,6 @@ static inline int __rtp_send_eachconnection(struct list_t *e, void *v)
     if (!con->trans[track_id].server_port_rtp && !con->trans[track_id].is_tcp) return SUCCESS;
 
     rtp->packet.header.seq = htons(con->trans[track_id].rtp_seq);
-    if (rtp->packet.header.m)
-        con->trans[track_id].rtp_timestamp = (millis() * 90) & UINT32_MAX;
     rtp->packet.header.ts = htonl(con->trans[track_id].rtp_timestamp);
     rtp->packet.header.ssrc = htonl(con->ssrc);
     con->trans[track_id].rtp_seq += 1;
@@ -179,27 +169,20 @@ static inline int __rtp_send_eachconnection(struct list_t *e, void *v)
         head[2] = (rtp->rtpsize >> 8) & 0xFF;
         head[3] = rtp->rtpsize & 0xFF;
 
+        struct iovec iov[2] = {
+            {.iov_base = head, .iov_len = sizeof(head)},
+            {.iov_base = &(rtp->packet), .iov_len = rtp->rtpsize}
+        };
         pthread_mutex_lock(&con->write_mutex);
-        int sent_h = 0;
-        while (sent_h < 4) {
-            int r = send(con->client_fd, head + sent_h, 4 - sent_h, 0);
-            if (r > 0) sent_h += r;
-            else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(1000);
-            else { sent_h = -1; break; }
-        }
-        if (sent_h == 4) {
-            int sent_b = 0;
-            while (sent_b < rtp->rtpsize) {
-                int r = send(con->client_fd, (char*)&(rtp->packet) + sent_b, rtp->rtpsize - sent_b, 0);
-                if (r > 0) sent_b += r;
-                else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(1000);
-                else { sent_b = -1; break; }
-            }
-            send_bytes = sent_b;
-        } else {
-            send_bytes = -1;
+        int send_rc = stream_send_deadline(con->client_fd, iov, 2, 100);
+        if (send_rc < 0) {
+            /* Retire the connection, not an incomplete interleaved packet.
+             * Socket close/reuse remains owned by the RTSP connection thread. */
+            shutdown(con->client_fd, SHUT_RDWR);
         }
         pthread_mutex_unlock(&con->write_mutex);
+        send_bytes = send_rc == 0 ? rtp->rtpsize : -1;
+        if (send_rc < 0) return SUCCESS; /* do not starve other subscribers */
 
         if (send_bytes == rtp->rtpsize) {
             con->trans[track_id].rtcp_packet_cnt += 1;
@@ -231,7 +214,11 @@ static inline int __rtp_send_eachconnection(struct list_t *e, void *v)
 
 static inline int __rtp_send(struct nal_rtp_t *rtp, struct list_head_t *trans_list)
 {
+#ifdef DIVINUS_RTP_TEST_SINK
+    return DIVINUS_RTP_TEST_SINK(rtp);
+#else
     return list_map_inline(trans_list, (__rtp_send_eachconnection), rtp);
+#endif
 }
 
 
@@ -240,7 +227,6 @@ static inline int __rtp_setup_transfer(struct list_t *e, void *v)
     struct connection_item_t *con;
     struct __transfer_set_t *trans_set = v;
     struct transfer_item_t *trans;
-    unsigned int timestamp_offset;
     int ret = FAILURE;
 
     list_upcast(con,e);
@@ -262,10 +248,13 @@ static inline int __rtp_setup_transfer(struct list_t *e, void *v)
         MUST(list_push(&trans_set->list_head, &trans->list_entry) == SUCCESS,
             goto error);
 
-        timestamp_offset = trans_set->h->stat.ts_offset;
-
-        con->trans[trans_set->track_id].rtp_timestamp = 
-            ((unsigned int)con->trans[trans_set->track_id].rtp_timestamp + timestamp_offset);
+        /* Select the timestamp once per access unit, before any NAL (or FU-A
+         * fragment) is emitted.  Updating it on an RTP marker made the first
+         * fragments of a large slice retain the previous picture timestamp,
+         * while only the final fragment received the new one.  SPS/PPS before
+         * an IDR had the same split-timestamp problem. */
+        con->trans[trans_set->track_id].rtp_timestamp =
+            trans_set->timestamp;
     }
 
     ret = SUCCESS;
@@ -411,6 +400,9 @@ int rtp_send_h26x(rtsp_handle h, hal_vidstream *stream, char isH265)
     int ret = FAILURE;
     int track_id = 0;
     struct __transfer_set_t trans = {};
+    struct rtp_au_tail tail;
+    if (rtp_au_find_tail(stream, &tail)) return FAILURE;
+    trans.timestamp = (millis() * 90) & UINT32_MAX;
 
     /* checkout RTP packet */
     DASSERT(h, return FAILURE);
@@ -441,14 +433,17 @@ int rtp_send_h26x(rtsp_handle h, hal_vidstream *stream, char isH265)
         for (int i = 0; i < stream->count; i++) {
             unsigned char *data = stream->pack[i].data + stream->pack[i].offset;
             size_t length = stream->pack[i].length - stream->pack[i].offset;
-            if (length >= 4 && data[0] == 0 && data[1] == 0 && data[2] == 0 && data[3] == 1) {
+            if (rtp_pack_annexb(data, length)) {
                 unsigned char *nalptr = data;
                 size_t single_len = 0;
                 while (nal_split(data, &nalptr, &single_len, length) == SUCCESS) {
-                    ASSERT(__transfer_nal_h26x(&(trans.list_head), nalptr, single_len, h->isH265) == SUCCESS, goto error);
+                    ASSERT(__transfer_nal_h26x(&(trans.list_head), nalptr, single_len, h->isH265,
+                        (unsigned)i == tail.pack && nalptr == tail.nal) == SUCCESS, goto error);
                 }
             } else {
-                ASSERT(__transfer_nal_h26x(&(trans.list_head), data, length, h->isH265) == SUCCESS, goto error);
+                if (!length) continue;
+                ASSERT(__transfer_nal_h26x(&(trans.list_head), data, length, h->isH265,
+                    (unsigned)i == tail.pack && data == tail.nal) == SUCCESS, goto error);
             }
         }
         ASSERT(list_map_inline(&(trans.list_head), (__rtcp_poll), &track_id) == SUCCESS, goto error);
@@ -467,6 +462,7 @@ int rtp_send_mp3(rtsp_handle h, unsigned char *buf, size_t len)
     int ret = FAILURE;
     int track_id = 1;
     struct __transfer_set_t trans = {};
+    trans.timestamp = (millis() * 90) & UINT32_MAX;
 
     /* checkout RTP packet */
     DASSERT(h, return FAILURE);

@@ -59,6 +59,8 @@ static void handle_frame(void *opaque, const struct fh86_stream_frame *frame) {
     stream.pack = &result.pack;
     stream.count = 1;
     stream.seq = source_sequence++;
+    if (frame->generation_changed)
+        media_capture_discontinuity();
     save_video_stream(0, &stream);
 }
 
@@ -107,7 +109,9 @@ int fh86_divinus_start(void) {
 
     if (app_config.mp4_enable)
         mp4_set_config(app_config.mp4_width, app_config.mp4_height,
-            app_config.mp4_fps, HAL_AUDCODEC_UNSPEC, 0, 1, 0);
+            app_config.mp4_fps,
+            app_config.audio_enable ? HAL_AUDCODEC_MP3 : HAL_AUDCODEC_UNSPEC,
+            app_config.audio_bitrate, 1, app_config.audio_srate);
 
     source_running = 1;
 

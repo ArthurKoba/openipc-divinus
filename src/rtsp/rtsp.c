@@ -381,26 +381,19 @@ static int __message_proc_sock(struct list_t *e, void *p)
     }
 
     if (FD_ISSET(con->client_fd, &(socks->rfds))) {
-        int first_char = fgetc(con->fp_tcp_read);
-        if (first_char == '$') {
-            unsigned char head[3];
-            if (fread(head, 1, 3, con->fp_tcp_read) == 3) {
-                int len = (head[1] << 8) | head[2];
-                while (len > 0) {
-                    int r = fread(buf, 1, min(len, sizeof(buf)), con->fp_tcp_read);
-                    if (r <= 0) break;
-                    len -= r;
-                }
-                DBG("discarded interleaved packet (%d bytes)\n", (head[1] << 8) | head[2]);
-            }
-            return SUCCESS;
-        } else if (first_char != EOF) {
-            ungetc(first_char, con->fp_tcp_read);
-        } else {
+      for (;;) {
+        char request[8192];
+        unsigned request_length;
+        int input_rc = rtsp_tcp_next(con->client_fd, &con->input, request, &request_length);
+        if (!input_rc) return SUCCESS;
+        if (input_rc < 0) {
+            ERR("RTSP input ended fd=%d status=%d\n", con->client_fd, input_rc);
             con->con_state = __CON_S_DISCONNECTED;
             ASSERT(bufpool_detach(con->pool, con) == SUCCESS, ERR("connection detach failed\n"));
             return SUCCESS;
         }
+        con->fp_tcp_read = fmemopen(request, request_length, "r");
+        if (!con->fp_tcp_read) return FAILURE;
 
         con->parser_state = __PARSER_S_INIT;
         con->method = __METHOD_NONE;
@@ -415,6 +408,11 @@ static int __message_proc_sock(struct list_t *e, void *p)
                 } else if (SCMP(__STR_DESCRIBE, buf))    { con->method = __METHOD_DESCRIBE;
                 } else if (SCMP(__STR_SETUP, buf))       { con->method = __METHOD_SETUP;
                     STR_KEY_NUM(buf, "track=", con->track_id);
+                    if (con->track_id < 0 || con->track_id >= 2) {
+                        con->track_id = 0;
+                        __PARSE_ERROR(con);
+                        break;
+                    }
                 } else if (SCMP(__STR_PLAY, buf))        { con->method = __METHOD_PLAY;
                 } else if (SCMP(__STR_RECORDING, buf))   { con->method = __METHOD_RECORDING;
                 } else if (SCMP(__STR_PAUSE, buf))       { con->method = __METHOD_PAUSE;
@@ -468,6 +466,8 @@ error:
             __PARSE_ERROR(con);
         }
 
+        fclose(con->fp_tcp_read);
+        con->fp_tcp_read = NULL;
         /* __read_line() already marks and detaches an EOF connection.
          * Return before METHOD_NONE can detach the same pool reference again;
          * the normal list sweep will remove the disconnected entry. */
@@ -501,6 +501,8 @@ error:
                 default: ERR("unexpected method state\n"); return FAILURE;
             }
         }
+        if (con->con_state == __CON_S_DISCONNECTED) return SUCCESS;
+      }
     }
     return SUCCESS;
 }
@@ -566,8 +568,12 @@ __connection_list_add(bufpool_handle con_pool, struct list_head_t *head, int fd,
     p->addr=addr;
     p->client_fd=fd;
 
-    ASSERT((p->fp_tcp_read = fdopen(fd, "r")), goto error);
-    ASSERT((p->fp_tcp_write = fdopen(fd, "w")), goto error);
+    memset(&p->input, 0, sizeof(p->input));
+    p->fp_tcp_read = NULL;
+    int write_fd = dup(fd);
+    ASSERT(write_fd >= 0, goto error);
+    p->fp_tcp_write = fdopen(write_fd, "w");
+    if (!p->fp_tcp_write) { close(write_fd); goto error; }
 
     p->con_state = __CON_S_INIT;
 

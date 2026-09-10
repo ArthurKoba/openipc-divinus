@@ -323,6 +323,145 @@
 				while (frame.firstChild) frame.removeChild(frame.firstChild);
 		}
 
+		var lensSwitchBusy = false;
+
+		function setLens(target) {
+			var req = new XMLHttpRequest();
+			var status = document.getElementById('lens_target');
+			if (lensSwitchBusy) return;
+			lensSwitchBusy = true;
+			if (status) status.innerHTML = target + '...';
+			req.onreadystatechange = function() {
+				if (this.readyState != 4) return;
+				lensSwitchBusy = false;
+				if (this.status != 200) {
+					if (status) status.innerHTML = 'error';
+					return;
+				}
+				var dec = JSON.parse(req.responseText);
+				if (status) status.innerHTML = dec.target;
+				setTimeout(function() {
+					var player = document.getElementById('player');
+					if (player) {
+						player.load();
+						player.play();
+					}
+				}, 250);
+			}
+			req.timeout = 5000;
+			req.ontimeout = function() {
+				lensSwitchBusy = false;
+				if (status) status.innerHTML = 'timeout';
+			};
+			req.open('GET', '/api/lens?target=' + encodeURIComponent(target));
+			req.send();
+		}
+
+		var ptzBusy = false;
+
+		function refreshPtz() {
+			var req = new XMLHttpRequest(), status = document.getElementById('ptz_status');
+			req.onreadystatechange = function() {
+				if (this.readyState != 4) return;
+				if (this.status != 200) {
+					if (status) status.innerHTML = 'unavailable';
+					return;
+				}
+				var dec = JSON.parse(req.responseText), state = dec.status || dec;
+				if (status) status.innerHTML = state.available ?
+					('pan ' + state.pan + ' / tilt ' + state.tilt +
+					 (state.busy ? ' (moving)' : '')) : 'unavailable';
+			}
+			req.open('GET', '/api/ptz');
+			req.send();
+		}
+
+		function movePtz(action, pan, tilt) {
+			var req = new XMLHttpRequest(), status = document.getElementById('ptz_status');
+			if (ptzBusy) return;
+			ptzBusy = true;
+			if (status) status.innerHTML = 'moving...';
+			req.onreadystatechange = function() {
+				if (this.readyState != 4) return;
+				ptzBusy = false;
+				if (this.status != 200) {
+					if (status) status.innerHTML = 'command failed';
+					return;
+				}
+				refreshPtz();
+			}
+			req.timeout = 30000;
+			req.ontimeout = function() {
+				ptzBusy = false;
+				if (status) status.innerHTML = 'timeout';
+			}
+			var url = '/api/ptz?action=' + encodeURIComponent(action);
+			if (action != 'home')
+				url += '&pan=' + encodeURIComponent(pan) + '&tilt=' + encodeURIComponent(tilt);
+			req.open('GET', url);
+			req.send();
+		}
+
+		function presetPtz(action, token) {
+			var req = new XMLHttpRequest(), status = document.getElementById('ptz_status');
+			if (ptzBusy) return;
+			ptzBusy = true;
+			if (status) status.innerHTML = action == 'preset_goto' ? 'moving...' : 'saving...';
+			req.onreadystatechange = function() {
+				if (this.readyState != 4) return;
+				ptzBusy = false;
+				if (this.status != 200) {
+					if (status) status.innerHTML = 'preset command failed';
+					return;
+				}
+				refreshPtz();
+			}
+			req.timeout = 30000;
+			req.ontimeout = function() {
+				ptzBusy = false;
+				if (status) status.innerHTML = 'timeout';
+			}
+			req.open('GET', '/api/ptz?action=' + encodeURIComponent(action) +
+				'&token=' + encodeURIComponent(token));
+			req.send();
+		}
+
+		function setIllumination(key, value) {
+			var req = new XMLHttpRequest();
+			req.onreadystatechange = function() {
+				if (this.readyState != 4) return;
+				if (this.status != 200)
+					return alert('Illumination command failed: ' + req.responseText);
+				apiRead('illumination');
+			}
+			req.open('GET', '/api/illumination?' + key + '=' + encodeURIComponent(value));
+			req.send();
+		}
+
+		function applyIlluminationGpio() {
+			var keys = ['day_pin', 'night_pin', 'ir_pin', 'white_pin',
+				'sadc_channel', 'pulse_ms', 'ir_active', 'white_active',
+				'ircut_active', 'ircut_rest'];
+			var query = [], status = document.getElementById('illumination_gpio_status');
+			for (var i = 0; i < keys.length; i++) {
+				var elem = document.getElementById('illumination_gpio_' + keys[i]);
+				query.push(keys[i] + '=' + encodeURIComponent(elem.value));
+			}
+			if (status) status.innerHTML = 'applying...';
+			var req = new XMLHttpRequest();
+			req.onreadystatechange = function() {
+				if (this.readyState != 4) return;
+				if (this.status != 200) {
+					if (status) status.innerHTML = 'rejected';
+					return alert('GPIO configuration rejected: ' + req.responseText);
+				}
+				if (status) status.innerHTML = 'applied until reboot';
+				apiRead('illumination_gpio');
+			}
+			req.open('GET', '/api/illumination_gpio?' + query.join('&'));
+			req.send();
+		}
+
 		function toggleRecord(btn) {
 			if (!btn) return;
 
@@ -363,6 +502,9 @@
 
 		function every5Sec() {
 			apiRead('status');
+			apiRead('lens');
+			apiRead('illumination');
+			refreshPtz();
 		}
 
 		function onLoad() {
@@ -371,6 +513,10 @@
 			apiRead('mp4');
 			apiRead('mjpeg');
 			apiRead('night');
+			apiRead('lens');
+			apiRead('illumination');
+			apiRead('illumination_gpio');
+			refreshPtz();
 			apiRead('record');
 			toggleRecord(document.getElementById('record_state'));
 			apiRead('time');
@@ -413,12 +559,55 @@
 			<div class="col">
 				<a href="javascript:setSource('preview', 'video.mp4')" class="ph2">MP4</a>
 				<a href="javascript:setSource('preview', 'mjpeg')" class="ph2">MJPEG</a>
+				<a href="javascript:setLens('wide')" class="ph2">Wide</a>
+				<a href="javascript:setLens('tele')" class="ph2">Tele</a>
 				<a href="javascript:setSource('preview', '')" class="ph2">Stop</a>
 				<label for="live-modal" class="btn primary close">Close</label>
 			</div>
 		</div>
 		<div class="c cont">
-			<h2 class="unl">Live</h2>
+			<h2 class="unl">Live - lens: <span id="lens_target">unknown</span></h2>
+			<div class="box ph2 pv1">
+				<b>Lens:</b>
+				<a href="javascript:setLens('wide')" class="btn">Wide</a>
+				<a href="javascript:setLens('tele')" class="btn">Tele</a>
+				&nbsp;
+				<b>Scene:</b> <span id="illumination_scene">unknown</span>
+				&nbsp; <b>IR-cut:</b> <span id="illumination_ircut">unknown</span>
+				&nbsp; <b>IR LED:</b> <span id="illumination_irled">false</span>
+				&nbsp; <b>White LED:</b> <span id="illumination_white">false</span>
+				&nbsp; <b>Light sensor:</b> <span id="illumination_light">-</span>
+				<div class="pv1">
+					<a href="javascript:setIllumination('scene','auto')" class="btn primary">Auto</a>
+					<a href="javascript:setIllumination('scene','day')" class="btn">Day</a>
+					<a href="javascript:setIllumination('scene','night')" class="btn">Night / IR</a>
+					<a href="javascript:setIllumination('scene','wlight')" class="btn">White light</a>
+					<a href="javascript:setIllumination('ircut','day')" class="btn">IR CUT day</a>
+					<a href="javascript:setIllumination('ircut','night')" class="btn">IR CUT night</a>
+					<a href="javascript:setIllumination('irled','on')" class="btn">IR LED on</a>
+					<a href="javascript:setIllumination('irled','off')" class="btn">IR LED off</a>
+					<a href="javascript:setIllumination('white','on')" class="btn">White on</a>
+					<a href="javascript:setIllumination('white','off')" class="btn">White off</a>
+					<a href="javascript:setIllumination('read','light')" class="btn">Read light</a>
+				</div>
+				<div class="pv1">
+					<b>PTZ:</b> <span id="ptz_status">loading...</span><br>
+					<a href="javascript:movePtz('move',0,16)" class="btn">&#8593;</a>
+					<a href="javascript:movePtz('move',32,0)" class="btn">&#8592;</a>
+					<a href="javascript:movePtz('home',0,0)" class="btn primary">Home</a>
+					<a href="javascript:movePtz('move',-32,0)" class="btn">&#8594;</a>
+					<a href="javascript:movePtz('move',0,-16)" class="btn">&#8595;</a>
+					<br><small>Presets: click to go, S to save current position</small><br>
+					<a href="javascript:presetPtz('preset_goto','preset1')" class="btn">1</a>
+					<a href="javascript:presetPtz('preset_set','preset1')" class="btn primary">S1</a>
+					<a href="javascript:presetPtz('preset_goto','preset2')" class="btn">2</a>
+					<a href="javascript:presetPtz('preset_set','preset2')" class="btn primary">S2</a>
+					<a href="javascript:presetPtz('preset_goto','preset3')" class="btn">3</a>
+					<a href="javascript:presetPtz('preset_set','preset3')" class="btn primary">S3</a>
+					<a href="javascript:presetPtz('preset_goto','preset4')" class="btn">4</a>
+					<a href="javascript:presetPtz('preset_set','preset4')" class="btn primary">S4</a>
+				</div>
+			</div>
 			<div id="preview" width="100%"></div>
 		</div>
 	</div>
@@ -794,6 +983,27 @@
 							</tr>
 						</table>
 						<a href="javascript:apiApply('night')" class="btn right">Apply</a>
+					</fieldset>
+				</div>
+			</div>
+			<div class="row scrollx">
+				<div class="12 col box">
+					<fieldset>
+						<legend>FH8626 GPIO / illumination</legend>
+						<table class="tc w-100">
+							<tr><td>IR CUT day GPIO</td><td><input type="number" min="0" max="127" id="illumination_gpio_day_pin"></td></tr>
+							<tr><td>IR CUT night GPIO</td><td><input type="number" min="0" max="127" id="illumination_gpio_night_pin"></td></tr>
+							<tr><td>IR LED GPIO</td><td><input type="number" min="0" max="127" id="illumination_gpio_ir_pin"></td></tr>
+							<tr><td>White LED GPIO / shared pad</td><td><input type="number" min="0" max="127" id="illumination_gpio_white_pin"></td></tr>
+							<tr><td>Light sensor SADC channel</td><td><input type="number" min="0" max="7" id="illumination_gpio_sadc_channel"></td></tr>
+							<tr><td>IR CUT pulse, ms</td><td><input type="number" min="20" max="1000" id="illumination_gpio_pulse_ms"></td></tr>
+							<tr><td>IR LED active level</td><td><input type="number" min="0" max="1" id="illumination_gpio_ir_active"></td></tr>
+							<tr><td>White LED active level</td><td><input type="number" min="0" max="1" id="illumination_gpio_white_active"></td></tr>
+							<tr><td>IR CUT pulse level</td><td><input type="number" min="0" max="1" id="illumination_gpio_ircut_active"></td></tr>
+							<tr><td>IR CUT rest level</td><td><input type="number" min="0" max="1" id="illumination_gpio_ircut_rest"></td></tr>
+						</table>
+						<span id="illumination_gpio_status">runtime settings</span>
+						<a href="javascript:applyIlluminationGpio()" class="btn right">Apply GPIO</a>
 					</fieldset>
 				</div>
 			</div>

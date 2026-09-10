@@ -276,7 +276,12 @@ Manages video recording operations.
 | GET    | `segment_duration` | Sets the maximum segment duration (seconds)        |
 | GET    | `segment_size`     | Sets the maximum segment size (bytes)              |
 | GET    | `start`            | Starts a new recording session                     |
-| GET    | `stop`             | Stops the current recording session                |
+| GET    | `stop`             | Stops the current session, including continuous mode |
+
+When no explicit `filename` is configured, Divinus joins `path` with a
+FAT-compatible `recording_YYYYMMDD_HHMMSS.mp4` name. A write error stops and
+closes the current recording so removable-media failures do not leave the
+recorder pretending that it is still active.
 
 **Response**
 ```json
@@ -291,6 +296,32 @@ Manages video recording operations.
 }
 ```
 
+
+### `/api/ptz`
+
+Controls the FH8626V100 pan/tilt provider. Relative and absolute commands are
+synchronous and return only after the bounded motor operation finishes.
+
+| Method | Parameters | Description |
+|--------|------------|-------------|
+| GET | none or `action=status` | Current coordinates, ranges and busy state |
+| GET | `action=move&pan=N&tilt=N` | Relative move in calibrated motor units |
+| GET | `action=goto&pan=N&tilt=N` | Absolute move to calibrated coordinates |
+| GET | `action=home` | Return to the configured home position |
+| GET | `action=presets` | List persistent presets |
+| GET | `action=preset_set&token=NAME` | Save the current coordinates |
+| GET | `action=preset_goto&token=NAME` | Move to a saved preset |
+| GET | `action=preset_remove&token=NAME` | Delete a preset |
+
+Preset tokens contain only letters, digits, `.`, `_`, and `-`. At most eight
+presets are stored atomically in `/etc/openipc/ptz.presets`.
+
+The same provider is exposed through ONVIF PTZ 2.0. `AbsoluteMove`,
+`RelativeMove`, home and preset operations preserve tracked coordinates.
+Because this camera has no position encoder, `ContinuousMove` is implemented as
+a finite bounded jog and `Stop` is consequently a no-op after that jog.
+The ONVIF Y axis and the calibrated FH8626 tilt coordinate both increase
+toward physical up, so no additional Y inversion is applied.
 
 ## Content Streaming
 
@@ -354,3 +385,11 @@ Gracefully stops the server.
 WebUI homepage.
 
 **Response**: HTML SPA with embedded resources
+# FH86 capture timing (2026-09-05 local integration)
+
+For `source.type: fh86`, MP4 sample timing follows the source microsecond PTS
+automatically. `/api/fh86` exposes `mp4_timing: capture_pts_us`. The YAML `mp4.fps`
+remains an integer requested configuration and initial timing fallback, not a
+measurement of actual FPS; do not use a string `auto`. Width/height still must
+match the encoded source. This changes mux timing, not sensor or encoder speed.
+Restart existing HTTP/VLC playback sessions after upgrading the muxer.

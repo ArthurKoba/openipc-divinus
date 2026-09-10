@@ -4,6 +4,17 @@ const char *appconf_paths[] = {"./divinus.yaml", "/etc/divinus.yaml"};
 
 struct AppConfig app_config;
 
+static const char *vidmode_name(int mode) {
+    switch (mode) {
+    case HAL_VIDMODE_CBR:  return "CBR";
+    case HAL_VIDMODE_VBR:  return "VBR";
+    case HAL_VIDMODE_QP:   return "QP";
+    case HAL_VIDMODE_ABR:  return "ABR";
+    case HAL_VIDMODE_AVBR: return "AVBR";
+    default:               return "CBR";
+    }
+}
+
 static enum ConfigError parse_source_type(
     struct IniConfig *ini, enum AppSourceType *source_type) {
     const char *source_types[] = {"sdk", "fh86"};
@@ -212,7 +223,7 @@ int app_config_save(void) {
     fprintf(file, "mp4:\n");
     fprintf(file, "  enable: %s\n", app_config.mp4_enable ? "true" : "false");
     fprintf(file, "  codec: %s\n", app_config.mp4_codecH265 ? "H.265" : "H.264");
-    fprintf(file, "  mode: %d\n", app_config.mp4_mode);
+    fprintf(file, "  mode: %s\n", vidmode_name(app_config.mp4_mode));
     fprintf(file, "  width: %d\n", app_config.mp4_width);
     fprintf(file, "  height: %d\n", app_config.mp4_height);
     fprintf(file, "  fps: %d\n", app_config.mp4_fps);
@@ -249,7 +260,7 @@ int app_config_save(void) {
 
     fprintf(file, "mjpeg:\n");
     fprintf(file, "  enable: %s\n", app_config.mjpeg_enable ? "true" : "false");
-    fprintf(file, "  mode: %d\n", app_config.mjpeg_mode);
+    fprintf(file, "  mode: %s\n", vidmode_name(app_config.mjpeg_mode));
     fprintf(file, "  width: %d\n", app_config.mjpeg_width);
     fprintf(file, "  height: %d\n", app_config.mjpeg_height);
     fprintf(file, "  fps: %d\n", app_config.mjpeg_fps);
@@ -552,6 +563,11 @@ enum ConfigError app_config_parse(void) {
         parse_int(&ini, "audio", "gain", -60, 30, &app_config.audio_gain);
         parse_int(&ini, "audio", "srate", 8000, 96000,
             &app_config.audio_srate);
+        if (app_config.source_type == APP_SOURCE_FH86) {
+            app_config.audio_bitrate = 32;
+            app_config.audio_gain = 30;
+            app_config.audio_srate = 8000;
+        }
     }
 
     parse_bool(&ini, "mp4", "enable", &app_config.mp4_enable);
@@ -699,12 +715,12 @@ enum ConfigError app_config_parse(void) {
     }
 
     if (app_config.source_type == APP_SOURCE_FH86) {
-        if (app_config.audio_enable || app_config.jpeg_enable ||
-            app_config.mjpeg_enable || app_config.osd_enable ||
+        if (app_config.jpeg_enable || app_config.mjpeg_enable ||
+            app_config.osd_enable ||
             app_config.night_mode_enable || app_config.http_post_enable) {
             HAL_DANGER("app_config",
-                "FH86 external source currently supports encoded H.264 only; "
-                "audio/JPEG/MJPEG/OSD/night-mode/HTTP-post must be disabled.\n");
+                "FH86 external source currently does not support "
+                "JPEG/MJPEG/OSD/night-mode/HTTP-post.\n");
             err = CONFIG_PARAM_INVALID_FORMAT;
             goto RET_ERR;
         }

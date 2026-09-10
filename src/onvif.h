@@ -23,3 +23,5 @@ void onvif_respond_snapshot(char *response, int *respLen);
 void onvif_respond_stream(char *response, int *respLen);
 void onvif_respond_systemtime(char *response, int *respLen);
 void onvif_respond_videosources(char *response, int *respLen);
+int onvif_respond_ptz(const char *action, const char *payload,
+    char *response, int *respLen);

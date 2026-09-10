@@ -111,6 +111,14 @@ int main(int argc, char *argv[]) {
     if (app_config.source_type == APP_SOURCE_FH86) {
         if (fh86_divinus_start())
             HAL_ERROR("fh86_source", "Failed to start external source!\n");
+        /* FH86 uses an external owner and does not require stream.enable, but
+         * that also meant media_start() never applied MP4 rate control for the
+         * common RTSP/HTTP configuration.  Apply it after the source/owner
+         * transport is up so every cold start receives the configured rate. */
+        if (app_config.mp4_enable && media_mp4_enable())
+            HAL_ERROR("media", "FH86 MP4 configuration failed!\n");
+        if (app_config.audio_enable && media_audio_enable())
+            HAL_ERROR("fh86_audio", "Failed to start external audio source!\n");
     } else if (sdk_start())
         HAL_ERROR("hal", "Failed to start SDK!\n");
 
@@ -144,9 +152,10 @@ int main(int argc, char *argv[]) {
     if (app_config.night_mode_enable)
         night_disable();
 
-    if (app_config.source_type == APP_SOURCE_FH86)
+    if (app_config.source_type == APP_SOURCE_FH86) {
+        if (app_config.audio_enable) media_audio_disable();
         fh86_divinus_stop();
-    else
+    } else
         sdk_stop();
 
     if (app_config.stream_enable)

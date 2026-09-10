@@ -2,7 +2,9 @@
 #include "source/fh8626_platform.h"
 #include "source/fh8626_webdiag.h"
 #include "source/fh86_divinus.h"
+#include "ptz.h"
 
+#include <limits.h>
 #include <math.h>
 
 #define HTTP_MAX_CLIENTS 50
@@ -90,55 +92,17 @@ void free_client(int i) {
     client_fds[i].sockFd = -1;
 }
 
+#include "stream_send.h"
+
 int send_to_fd(int fd, char *buf, ssize_t size) {
-    if (fd < 0) return -1;
-
-    ssize_t total = 0;
-    for (int attempts = 0; attempts < 4; attempts++) {
-        ssize_t n = send(fd, buf + total, size - total, MSG_DONTWAIT | MSG_NOSIGNAL);
-        if (n > 0) {
-            total += n;
-            attempts = -1;
-        } else if (n == 0) return -1;
-        else if (errno != EAGAIN && errno != EWOULDBLOCK) return -1;
-
-        if (total == size) return EXIT_SUCCESS;
-
-        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-        if (poll(&pfd, 1, 25) < 0) return -1;
-    }
-
-    return -1;
+    if (size < 0) return -1;
+    struct iovec iov = {.iov_base = buf, .iov_len = (size_t)size};
+    return size ? stream_send_deadline(fd, &iov, 1, 100) : 0;
 }
 
 int sendv_to_client(int i, struct iovec *iov, int iovcnt) {
-    int fd = client_fds[i].sockFd;
-    if (fd < 0) return -1;
-
-    for (int attempts = 0; attempts < 4; attempts++) {
-        ssize_t n = writev(fd, iov, iovcnt);
-        if (n > 0) {
-            while (n > 0 && iovcnt > 0) {
-                if (n >= iov[0].iov_len) {
-                    n -= iov[0].iov_len;
-                    iov++;
-                    iovcnt--;
-                } else {
-                    iov[0].iov_base = (char *)iov[0].iov_base + n;
-                    iov[0].iov_len -= n;
-                    n = 0;
-                }
-            }
-            if (iovcnt == 0) return 0;
-            attempts = -1;
-        } else if (n == 0) goto error;
-        else if (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) goto error;
-
-        struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-        if (poll(&pfd, 1, 25) < 0) goto error;
-    }
-
-error:
+    if (stream_send_deadline(client_fds[i].sockFd, iov, iovcnt, 100) == 0)
+        return 0;
     free_client(i);
     return -1;
 }
@@ -146,7 +110,7 @@ error:
 int send_to_client(int i, char *buf, ssize_t size) {
     if (send_to_fd(client_fds[i].sockFd, buf, size) < 0) {
         free_client(i);
-        return EXIT_FAILURE;
+        return -1; /* callers test < 0; EXIT_FAILURE silently bypassed them */
     }
 
     return EXIT_SUCCESS;
@@ -198,6 +162,250 @@ static void send_fh86_provider_unavailable(int fd, const char *provider) {
     send_and_close(fd, response, len);
 }
 
+static int parse_int_parameter(const char *text, int *value) {
+    char *end;
+    long parsed;
+
+    if (!text || !*text || !value) return -EINVAL;
+    errno = 0;
+    parsed = strtol(text, &end, 10);
+    if (errno || end == text || *end || parsed < INT_MIN || parsed > INT_MAX)
+        return -EINVAL;
+    *value = (int)parsed;
+    return 0;
+}
+
+static void send_ptz_result(int fd, int result) {
+    char status[768], response[1024];
+    int status_len = ptz_status_json(status, sizeof(status));
+    int http_status = result ? (result == -EBUSY ? 409 : 503) : 200;
+    const char *http_text = result ?
+        (result == -EBUSY ? "Conflict" : "Service Unavailable") : "OK";
+    int length;
+
+    if (status_len < 0) snprintf(status, sizeof(status),
+        "{\"available\":false,\"error\":%d}", -status_len);
+    length = snprintf(response, sizeof(response),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json;charset=UTF-8\r\n"
+        "Connection: close\r\n\r\n"
+        "{\"code\":%d,\"status\":%s}",
+        http_status, http_text, result, status);
+    if (length < 0 || (size_t)length >= sizeof(response)) {
+        send_http_error(fd, 500);
+        return;
+    }
+    send_and_close(fd, response, length);
+}
+
+static void send_ptz_preset_result(int fd, int result, const char *token) {
+    char status[768], response[1152];
+    int status_len = ptz_status_json(status, sizeof(status));
+    int http_status = result == -EINVAL ? 400 : result == -ENOENT ? 404 :
+        (result == -EBUSY || result == -ENOSPC) ? 409 : result ? 503 : 200;
+    const char *http_text = http_status == 200 ? "OK" :
+        http_status == 400 ? "Bad Request" : http_status == 404 ? "Not Found" :
+        http_status == 409 ? "Conflict" : "Service Unavailable";
+    int length;
+
+    if (status_len < 0) snprintf(status, sizeof(status),
+        "{\"available\":false,\"error\":%d}", -status_len);
+    length = snprintf(response, sizeof(response),
+        "HTTP/1.1 %d %s\r\n"
+        "Content-Type: application/json;charset=UTF-8\r\n"
+        "Connection: close\r\n\r\n"
+        "{\"code\":%d,\"token\":\"%s\",\"status\":%s}",
+        http_status, http_text, result, token ? token : "", status);
+    if (length < 0 || (size_t)length >= sizeof(response)) {
+        send_http_error(fd, 500);
+        return;
+    }
+    send_and_close(fd, response, length);
+}
+
+static void send_ptz_presets(int fd) {
+    char json[1024], response[1280];
+    int json_len = ptz_presets_json(json, sizeof(json));
+    int length;
+
+    if (json_len < 0) {
+        send_ptz_preset_result(fd, json_len, NULL);
+        return;
+    }
+    length = snprintf(response, sizeof(response),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json;charset=UTF-8\r\n"
+        "Connection: close\r\n\r\n%s", json);
+    if (length < 0 || (size_t)length >= sizeof(response)) {
+        send_http_error(fd, 500);
+        return;
+    }
+    send_and_close(fd, response, length);
+}
+
+static int fh86_owner_lens_state(char *state, size_t state_size) {
+    FILE *file;
+    size_t len;
+
+    if (!state || state_size < 8) return -EINVAL;
+    file = fopen("/tmp/fh8626_lens.state", "r");
+    if (!file) return -errno;
+    if (!fgets(state, state_size, file)) {
+        int err = ferror(file) ? -EIO : -ENODATA;
+        fclose(file);
+        return err;
+    }
+    fclose(file);
+    len = strcspn(state, "\r\n");
+    state[len] = '\0';
+    if (!EQUALS(state, "wide") && !EQUALS(state, "tele"))
+        return -EPROTO;
+    return 0;
+}
+
+static int fh86_owner_lens_set(const char *target) {
+    char command[24];
+    char state[16];
+    int fd, len, rc;
+
+    if (!target || (!EQUALS(target, "wide") && !EQUALS(target, "tele")))
+        return -EINVAL;
+    len = snprintf(command, sizeof(command), "lens %s\n", target);
+    if (len < 0 || (size_t)len >= sizeof(command)) return -EOVERFLOW;
+    fd = open("/tmp/fh8626_ctl", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    rc = write(fd, command, (size_t)len) == len ? 0 : -EIO;
+    close(fd);
+    if (rc) return rc;
+
+    for (int attempt = 0; attempt < 24; ++attempt) {
+        if (!fh86_owner_lens_state(state, sizeof(state)) && EQUALS(state, target))
+            return 0;
+        usleep(50000);
+    }
+    return -ETIMEDOUT;
+}
+
+struct fh86_illum_state {
+    char scene[8];
+    char ircut[8];
+    int irled;
+    int white;
+    int light;
+};
+
+struct fh86_illum_config {
+    int day_pin, night_pin, ir_pin, white_pin, sadc_channel, pulse_ms;
+    int ir_active, white_active, ircut_active, ircut_rest;
+};
+
+static int fh86_illum_config_read(struct fh86_illum_config *config) {
+    FILE *pipe;
+    char line[320];
+    int found = 0;
+
+    if (!config) return -EINVAL;
+    pipe = popen("/usr/sbin/fh-anjia-ajl33pq0866-light status", "r");
+    if (!pipe) return -errno;
+    while (fgets(line, sizeof(line), pipe)) {
+        if (sscanf(line,
+                   "config day_pin=%d night_pin=%d ir_pin=%d white_pin=%d sadc_channel=%d pulse_ms=%d ir_active=%d white_active=%d ircut_active=%d ircut_rest=%d",
+                   &config->day_pin, &config->night_pin, &config->ir_pin,
+                   &config->white_pin, &config->sadc_channel, &config->pulse_ms,
+                   &config->ir_active, &config->white_active,
+                   &config->ircut_active, &config->ircut_rest) == 10) {
+            found = 1;
+        }
+    }
+    if (pclose(pipe) != 0 || !found) return -EIO;
+    return 0;
+}
+
+static int fh86_illum_config_valid(const struct fh86_illum_config *config) {
+    if (!config) return 0;
+    if (config->day_pin < 0 || config->day_pin > 127 ||
+        config->night_pin < 0 || config->night_pin > 127 ||
+        config->ir_pin < 0 || config->ir_pin > 127 ||
+        config->white_pin < 0 || config->white_pin > 127 ||
+        config->sadc_channel < 0 || config->sadc_channel > 7 ||
+        config->pulse_ms < 20 || config->pulse_ms > 1000)
+        return 0;
+    if ((config->ir_active & ~1) || (config->white_active & ~1) ||
+        (config->ircut_active & ~1) || (config->ircut_rest & ~1))
+        return 0;
+    if (config->day_pin == config->night_pin ||
+        config->day_pin == config->ir_pin ||
+        config->day_pin == config->white_pin ||
+        config->night_pin == config->ir_pin ||
+        config->night_pin == config->white_pin ||
+        config->ir_pin == config->white_pin ||
+        config->ircut_active == config->ircut_rest)
+        return 0;
+    return 1;
+}
+
+static int fh86_illum_config_write(const struct fh86_illum_config *config) {
+    const char *tmp = "/tmp/fh8626-illumination.conf.tmp";
+    const char *path = "/tmp/fh8626-illumination.conf";
+    FILE *file;
+
+    if (!fh86_illum_config_valid(config)) return -EINVAL;
+    file = fopen(tmp, "w");
+    if (!file) return -errno;
+    fprintf(file,
+            "FH8626_IRCUT_DAY_GPIO=%d\nFH8626_IRCUT_NIGHT_GPIO=%d\n"
+            "FH8626_IRCUT_ACTIVE=%d\nFH8626_IRCUT_REST=%d\n"
+            "FH8626_IRCUT_PULSE_MS=%d\nFH8626_IR_LED_GPIO=%d\n"
+            "FH8626_IR_LED_ACTIVE=%d\nFH8626_WHITE_LED_GPIO=%d\n"
+            "FH8626_WHITE_LED_ACTIVE=%d\nFH8626_LIGHT_SENSOR_CHANNEL=%d\n",
+            config->day_pin, config->night_pin, config->ircut_active,
+            config->ircut_rest, config->pulse_ms, config->ir_pin,
+            config->ir_active, config->white_pin, config->white_active,
+            config->sadc_channel);
+    if (fclose(file)) {
+        unlink(tmp);
+        return -EIO;
+    }
+    if (rename(tmp, path)) {
+        int err = -errno;
+        unlink(tmp);
+        return err;
+    }
+    return 0;
+}
+
+static int fh86_owner_command_line(const char *command) {
+    size_t len;
+    int fd, rc;
+
+    if (!command || !(len = strlen(command)) || len > 120) return -EINVAL;
+    fd = open("/tmp/fh8626_ctl", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) return -errno;
+    rc = write(fd, command, len) == (ssize_t)len ? 0 : -EIO;
+    close(fd);
+    return rc;
+}
+
+static int fh86_owner_illum_state(struct fh86_illum_state *state) {
+    FILE *file;
+    char line[160];
+
+    if (!state) return -EINVAL;
+    file = fopen("/tmp/fh8626_illum.state", "r");
+    if (!file) return -errno;
+    if (!fgets(line, sizeof(line), file)) {
+        int err = ferror(file) ? -EIO : -ENODATA;
+        fclose(file);
+        return err;
+    }
+    fclose(file);
+    memset(state, 0, sizeof(*state));
+    if (sscanf(line, "scene=%7s ircut=%7s irled=%d white=%d light=%d",
+               state->scene, state->ircut, &state->irled, &state->white,
+               &state->light) != 5) return -EPROTO;
+    return 0;
+}
+
 void send_h26x_to_client(char index, hal_vidstream *stream) {
     for (unsigned int i = 0; i < stream->count; ++i) {
         hal_vidpack *pack = &stream->pack[i];
@@ -243,26 +451,7 @@ void send_h26x_to_client(char index, hal_vidstream *stream) {
 
 void send_mp4_to_client(char index, hal_vidstream *stream, char isH265) {
     for (unsigned int i = 0; i < stream->count; ++i) {
-        hal_vidpack *pack = &stream->pack[i];
-        unsigned char *pack_data = pack->data + pack->offset;
-
-        for (char j = 0; j < pack->naluCnt; j++) {
-            /* nalu[].offset points at the start code, which is 3 or 4
-             * bytes depending on the encoder; the muxer wants the payload. */
-            unsigned int scLen = (pack_data[pack->nalu[j].offset + 2] == 1) ? 3 : 4;
-            if ((pack->nalu[j].type == NalUnitType_SPS || pack->nalu[j].type == NalUnitType_SPS_HEVC)
-                && pack->nalu[j].length > scLen && pack->nalu[j].length <= UINT16_MAX)
-                mp4_set_sps(pack_data + pack->nalu[j].offset + scLen, pack->nalu[j].length - scLen, isH265);
-            else if ((pack->nalu[j].type == NalUnitType_PPS || pack->nalu[j].type == NalUnitType_PPS_HEVC)
-                && pack->nalu[j].length <= UINT16_MAX)
-                mp4_set_pps(pack_data + pack->nalu[j].offset + scLen, pack->nalu[j].length - scLen, isH265);
-            else if (pack->nalu[j].type == NalUnitType_VPS_HEVC && pack->nalu[j].length <= UINT16_MAX)
-                mp4_set_vps(pack_data + pack->nalu[j].offset + scLen, pack->nalu[j].length - scLen);
-            else if (pack->nalu[j].type == NalUnitType_CodedSliceIdr || pack->nalu[j].type == NalUnitType_CodedSliceAux)
-                mp4_set_slice(pack_data + pack->nalu[j].offset + scLen, pack->nalu[j].length - scLen, 1);
-            else if (pack->nalu[j].type == NalUnitType_CodedSliceNonIdr)
-                mp4_set_slice(pack_data + pack->nalu[j].offset + scLen, pack->nalu[j].length - scLen, 0);
-        }
+        /* Fragment prepared once by save_video_stream under mp4Mtx. */
 
         static enum BufError err;
         char len_buf[50];
@@ -272,6 +461,7 @@ void send_mp4_to_client(char index, hal_vidstream *stream, char isH265) {
             if (client_fds[i].type != STREAM_MP4) continue;
 
             if (!client_fds[i].mp4.header_sent) {
+                if (!mp4_fragment_is_key()) continue;
                 struct BitBuf header_buf;
                 err = mp4_get_header(&header_buf);
                 chk_err_continue ssize_t len_size =
@@ -285,7 +475,8 @@ void send_mp4_to_client(char index, hal_vidstream *stream, char isH265) {
 
                 client_fds[i].mp4.sequence_number = 0;
                 client_fds[i].mp4.base_data_offset = header_buf.offset;
-                client_fds[i].mp4.base_media_decode_time = 0;
+                client_fds[i].mp4.video_media_decode_time = 0;
+                client_fds[i].mp4.audio_media_decode_time = 0;
                 client_fds[i].mp4.header_sent = true;
                 client_fds[i].mp4.nals_count = 0;
                 client_fds[i].mp4.default_sample_duration =
@@ -514,8 +705,10 @@ void send_html(const int fd, const char *data) {
     char *buf;
     int buf_len = asprintf(&buf,
         "HTTP/1.1 200 OK\r\n" \
-        "Content-Type: text/html\r\n" \
+        "Content-Type: text/html; charset=UTF-8\r\n" \
         "Content-Length: %zu\r\n" \
+        "Cache-Control: no-store, no-cache, must-revalidate\r\n" \
+        "Pragma: no-cache\r\n" \
         "Connection: close\r\n" \
         "\r\n%s", strlen(data), data);
     buf[buf_len++] = 0;
@@ -666,6 +859,11 @@ void respond_request(http_request_t *req) {
                 return;
             } else if (EQUALS(action, "GetVideoSources")) {
                 onvif_respond_videosources((char*)response, &respLen);
+                send_and_close(req->clntFd, response, respLen);
+                return;
+            }
+        } else if (EQUALS(path, "ptz_service")) {
+            if (onvif_respond_ptz(action, req->payload, response, &respLen)) {
                 send_and_close(req->clntFd, response, respLen);
                 return;
             }
@@ -893,10 +1091,6 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/audio")) {
-        if (app_config.source_type == APP_SOURCE_FH86) {
-            send_fh86_provider_unavailable(req->clntFd, "audio");
-            return;
-        }
         if (req->query) {
             char *remain;
             while (req->query) {
@@ -925,6 +1119,11 @@ void respond_request(http_request_t *req) {
                 }
             }
 
+            if (app_config.source_type == APP_SOURCE_FH86) {
+                app_config.audio_bitrate = 32;
+                app_config.audio_gain = 30;
+                app_config.audio_srate = 8000;
+            }
             media_audio_disable();
             if (app_config.audio_enable) media_audio_enable();
         }
@@ -1304,6 +1503,277 @@ void respond_request(http_request_t *req) {
         return;
     }
 
+    if (EQUALS(req->uri, "/api/ptz")) {
+        enum { PTZ_STATUS, PTZ_MOVE, PTZ_GOTO, PTZ_HOME, PTZ_PRESETS,
+            PTZ_PRESET_SET, PTZ_PRESET_GOTO, PTZ_PRESET_REMOVE } action = PTZ_STATUS;
+        int pan = 0, tilt = 0, have_pan = 0, have_tilt = 0, invalid = 0;
+        const char *token = NULL;
+        char saved_token[32] = "";
+        int rc = 0;
+
+        if (req->query) {
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                if (!value || !*value) continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !value || !*value) { invalid = 1; break; }
+                if (EQUALS(key, "action")) {
+                    if (EQUALS(value, "status")) action = PTZ_STATUS;
+                    else if (EQUALS(value, "move")) action = PTZ_MOVE;
+                    else if (EQUALS(value, "goto")) action = PTZ_GOTO;
+                    else if (EQUALS(value, "home")) action = PTZ_HOME;
+                    else if (EQUALS(value, "presets")) action = PTZ_PRESETS;
+                    else if (EQUALS(value, "preset_set")) action = PTZ_PRESET_SET;
+                    else if (EQUALS(value, "preset_goto")) action = PTZ_PRESET_GOTO;
+                    else if (EQUALS(value, "preset_remove")) action = PTZ_PRESET_REMOVE;
+                    else invalid = 1;
+                } else if (EQUALS(key, "pan")) {
+                    invalid = parse_int_parameter(value, &pan) != 0;
+                    have_pan = !invalid;
+                } else if (EQUALS(key, "tilt")) {
+                    invalid = parse_int_parameter(value, &tilt) != 0;
+                    have_tilt = !invalid;
+                } else if (EQUALS(key, "token")) {
+                    token = value;
+                } else invalid = 1;
+                if (invalid) break;
+            }
+        }
+        if (invalid || (action == PTZ_GOTO && (!have_pan || !have_tilt)) ||
+            ((action == PTZ_PRESET_GOTO || action == PTZ_PRESET_REMOVE) &&
+             (!token || !*token))) {
+            send_http_error(req->clntFd, 400);
+            return;
+        }
+        if (action == PTZ_PRESETS) {
+            send_ptz_presets(req->clntFd);
+            return;
+        }
+        if (action == PTZ_MOVE)
+            rc = ptz_move_relative(have_pan ? pan : 0, have_tilt ? tilt : 0);
+        else if (action == PTZ_GOTO)
+            rc = ptz_move_absolute(pan, tilt);
+        else if (action == PTZ_HOME)
+            rc = ptz_home();
+        else if (action == PTZ_PRESET_SET) {
+            rc = ptz_preset_set(token, saved_token, sizeof(saved_token));
+            send_ptz_preset_result(req->clntFd, rc,
+                rc ? NULL : saved_token);
+            return;
+        } else if (action == PTZ_PRESET_GOTO)
+            rc = ptz_preset_goto(token);
+        else if (action == PTZ_PRESET_REMOVE)
+            rc = ptz_preset_remove(token);
+        send_ptz_result(req->clntFd, rc);
+        return;
+    }
+
+    if (EQUALS(req->uri, "/api/lens")) {
+        char state[16] = "unknown";
+        const char *requested = NULL;
+        int rc = 0;
+
+        if (app_config.source_type != APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "lens");
+            return;
+        }
+        if (req->query) {
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                if (!value || !*value) continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (key && value && EQUALS(key, "target")) requested = value;
+            }
+            if (!requested || (!EQUALS(requested, "wide") &&
+                               !EQUALS(requested, "tele"))) {
+                send_http_error(req->clntFd, 400);
+                return;
+            }
+            rc = fh86_owner_lens_set(requested);
+        }
+        if (!rc) rc = fh86_owner_lens_state(state, sizeof(state));
+        if (rc) {
+            respLen = snprintf(response, sizeof(response),
+                "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"available\":false,\"target\":\"%s\",\"error\":%d}",
+                state, -rc);
+        } else {
+            respLen = snprintf(response, sizeof(response),
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"available\":true,\"target\":\"%s\",\"switching\":false}",
+                state);
+        }
+        send_and_close(req->clntFd, response, respLen);
+        return;
+    }
+
+    if (EQUALS(req->uri, "/api/illumination_gpio")) {
+        struct fh86_illum_config config;
+        int rc;
+
+        if (app_config.source_type != APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "illumination_gpio");
+            return;
+        }
+        rc = fh86_illum_config_read(&config);
+        if (!rc && req->query) {
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key, *remain;
+                long result;
+                if (!value || !*value) continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !value || !*value) { rc = -EINVAL; break; }
+                result = strtol(value, &remain, 10);
+                if (remain == value || *remain || result < 0 || result > 1000) {
+                    rc = -EINVAL;
+                    break;
+                }
+                if (EQUALS(key, "day_pin")) config.day_pin = result;
+                else if (EQUALS(key, "night_pin")) config.night_pin = result;
+                else if (EQUALS(key, "ir_pin")) config.ir_pin = result;
+                else if (EQUALS(key, "white_pin")) config.white_pin = result;
+                else if (EQUALS(key, "sadc_channel")) config.sadc_channel = result;
+                else if (EQUALS(key, "pulse_ms")) config.pulse_ms = result;
+                else if (EQUALS(key, "ir_active")) config.ir_active = result;
+                else if (EQUALS(key, "white_active")) config.white_active = result;
+                else if (EQUALS(key, "ircut_active")) config.ircut_active = result;
+                else if (EQUALS(key, "ircut_rest")) config.ircut_rest = result;
+                else { rc = -EINVAL; break; }
+            }
+            if (!rc) rc = fh86_illum_config_write(&config);
+            if (!rc) rc = fh86_illum_config_read(&config);
+        }
+        if (rc) {
+            respLen = snprintf(response, sizeof(response),
+                "HTTP/1.1 400 Bad Request\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"available\":false,\"error\":%d}", -rc);
+        } else {
+            respLen = snprintf(response, sizeof(response),
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"available\":true,\"day_pin\":%d,\"night_pin\":%d,"
+                "\"ir_pin\":%d,\"white_pin\":%d,\"sadc_channel\":%d,"
+                "\"pulse_ms\":%d,\"ir_active\":%d,\"white_active\":%d,"
+                "\"ircut_active\":%d,\"ircut_rest\":%d,\"persistence\":\"until reboot\"}",
+                config.day_pin, config.night_pin, config.ir_pin,
+                config.white_pin, config.sadc_channel, config.pulse_ms,
+                config.ir_active, config.white_active, config.ircut_active,
+                config.ircut_rest);
+        }
+        send_and_close(req->clntFd, response, respLen);
+        return;
+    }
+
+    if (EQUALS(req->uri, "/api/illumination")) {
+        struct fh86_illum_state state;
+        char command[48] = "";
+        char expected_text[8] = "";
+        int expected_kind = 0, expected_bool = -1;
+        int rc = 0;
+
+        if (app_config.source_type != APP_SOURCE_FH86) {
+            send_fh86_provider_unavailable(req->clntFd, "illumination");
+            return;
+        }
+        if (req->query) {
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                if (!value || !*value) continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !value) continue;
+                if (EQUALS(key, "scene") &&
+                    (EQUALS(value, "auto") || EQUALS(value, "day") || EQUALS(value, "night") ||
+                     EQUALS(value, "wlight"))) {
+                    snprintf(command, sizeof(command), "scene %s\n", value);
+                    snprintf(expected_text, sizeof(expected_text), "%s", value);
+                    expected_kind = 1;
+                }
+                else if (EQUALS(key, "ircut") &&
+                         (EQUALS(value, "day") || EQUALS(value, "night"))) {
+                    snprintf(command, sizeof(command), "ircut %s\n", value);
+                    snprintf(expected_text, sizeof(expected_text), "%s", value);
+                    expected_kind = 2;
+                }
+                else if (EQUALS(key, "irled") &&
+                         (EQUALS(value, "on") || EQUALS(value, "off"))) {
+                    snprintf(command, sizeof(command), "irled %s\n", value);
+                    expected_kind = 3;
+                    expected_bool = EQUALS(value, "on");
+                }
+                else if (EQUALS(key, "white") &&
+                         (EQUALS(value, "on") || EQUALS(value, "off"))) {
+                    snprintf(command, sizeof(command), "white %s\n", value);
+                    expected_kind = 4;
+                    expected_bool = EQUALS(value, "on");
+                }
+                else if (EQUALS(key, "read") && EQUALS(value, "light")) {
+                    snprintf(command, sizeof(command), "lightsensor read\n");
+                    expected_kind = 5;
+                }
+                else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+            if (!command[0]) {
+                send_http_error(req->clntFd, 400);
+                return;
+            }
+            rc = fh86_owner_command_line(command);
+            if (!rc && expected_kind == 5) usleep(350000);
+            else if (!rc) {
+                int matched = 0;
+                for (int attempt = 0; attempt < 24; ++attempt) {
+                    usleep(50000);
+                    if (fh86_owner_illum_state(&state)) continue;
+                    if ((expected_kind == 1 && EQUALS(state.scene, expected_text)) ||
+                        (expected_kind == 2 && EQUALS(state.ircut, expected_text)) ||
+                        (expected_kind == 3 && state.irled == expected_bool) ||
+                        (expected_kind == 4 && state.white == expected_bool)) {
+                        matched = 1;
+                        break;
+                    }
+                }
+                if (!matched) rc = -ETIMEDOUT;
+            }
+        }
+        if (!rc) rc = fh86_owner_illum_state(&state);
+        if (rc) {
+            respLen = snprintf(response, sizeof(response),
+                "HTTP/1.1 503 Service Unavailable\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"available\":false,\"error\":%d}", -rc);
+        } else {
+            respLen = snprintf(response, sizeof(response),
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"available\":true,\"scene\":\"%s\","
+                "\"ircut\":\"%s\",\"irled\":%s,\"white\":%s,"
+                "\"light\":%d}", state.scene, state.ircut,
+                state.irled ? "true" : "false",
+                state.white ? "true" : "false", state.light);
+        }
+        send_and_close(req->clntFd, response, respLen);
+        return;
+    }
+
     if (app_config.osd_enable && STARTS_WITH(req->uri, "/api/osd/")) {
         char *remain;
         int respLen;
@@ -1440,8 +1910,10 @@ void respond_request(http_request_t *req) {
                 if (EQUALS(key, "enable")) {
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
                         app_config.record_enable = 1;
-                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0")) {
                         app_config.record_enable = 0;
+                        record_stop();
+                    }
                 }
                 else if (EQUALS(key, "continuous")) {
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
@@ -1464,12 +1936,14 @@ void respond_request(http_request_t *req) {
                         app_config.record_segment_size = result;
                 }
 
-                if (!app_config.record_enable) continue;
-                if (app_config.record_continuous) continue;
+                if (EQUALS(key, "stop")) {
+                    record_stop();
+                    continue;
+                }
+                if (!app_config.record_enable || app_config.record_continuous)
+                    continue;
                 if (EQUALS(key, "start"))
                     record_start();
-                else if (EQUALS(key, "stop"))
-                    record_stop();
             }
         }
         struct tm tm_buf, *tm_info = localtime_r(&recordStartTime, &tm_buf);

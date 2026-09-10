@@ -64,7 +64,7 @@ int fh86_live_diag_write_json(const struct fh86_live_diag *diag,
 
     if (diag->have_frame) {
         written = snprintf(buffer, size,
-            "{\"source\":\"fh86\",\"state\":\"%s\",\"running\":%s,"
+            "{\"source\":\"fh86\",\"mp4_timing\":\"capture_pts_us\",\"state\":\"%s\",\"running\":%s,"
             "\"frames_received\":%llu,\"frames_forwarded\":%llu,"
             "\"tiny_frames\":%llu,\"pack_errors\":%llu,"
             "\"generation\":%llu,\"generation_changes\":%llu,"
@@ -82,7 +82,7 @@ int fh86_live_diag_write_json(const struct fh86_live_diag *diag,
             (unsigned long long)age_ms);
     } else {
         written = snprintf(buffer, size,
-            "{\"source\":\"fh86\",\"state\":\"%s\",\"running\":%s,"
+            "{\"source\":\"fh86\",\"mp4_timing\":\"capture_pts_us\",\"state\":\"%s\",\"running\":%s,"
             "\"frames_received\":%llu,\"frames_forwarded\":%llu,"
             "\"tiny_frames\":%llu,\"pack_errors\":%llu,"
             "\"generation\":%llu,\"generation_changes\":%llu,"

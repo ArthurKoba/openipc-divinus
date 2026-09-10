@@ -51,27 +51,20 @@ static inline int __rtcp_send_sr(struct connection_item_t *con, int track_id)
         head[2] = 0;
         head[3] = 36;
 
+        struct iovec iov[2] = {
+            {.iov_base = head, .iov_len = sizeof(head)},
+            {.iov_base = &rtcp, .iov_len = 36}
+        };
         pthread_mutex_lock(&con->write_mutex);
-        int sent_h = 0;
-        while (sent_h < 4) {
-            int r = send(con->client_fd, head + sent_h, 4 - sent_h, 0);
-            if (r > 0) sent_h += r;
-            else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(1000);
-            else { sent_h = -1; break; }
-        }
-        if (sent_h == 4) {
-            int sent_b = 0;
-            while (sent_b < 36) {
-                int r = send(con->client_fd, (char*)&(rtcp) + sent_b, 36 - sent_b, 0);
-                if (r > 0) sent_b += r;
-                else if (r < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) usleep(1000);
-                else { sent_b = -1; break; }
-            }
-            send_bytes = sent_b;
-        } else {
-            send_bytes = -1;
+        int send_rc = stream_send_deadline(con->client_fd, iov, 2, 100);
+        if (send_rc < 0) {
+            /* Retire the connection, not an incomplete interleaved packet.
+             * Socket close/reuse remains owned by the RTSP connection thread. */
+            shutdown(con->client_fd, SHUT_RDWR);
         }
         pthread_mutex_unlock(&con->write_mutex);
+        send_bytes = send_rc == 0 ? 36 : -1;
+        if (send_rc < 0) return SUCCESS; /* do not starve other subscribers */
 
         ASSERT(send_bytes == 36, ({
             ERR("send (interleaved):%d:%s\n", send_bytes, strerror(errno));

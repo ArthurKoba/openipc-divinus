@@ -25,6 +25,7 @@
 #include "stream.h"
 
 extern rtsp_handle rtspHandle;
+void media_capture_discontinuity(void);
 
 int save_video_stream(char index, hal_vidstream *stream);
 int sdk_start(void);
