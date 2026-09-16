@@ -5,7 +5,7 @@
 #include "fh8626_native_runtime.h"
 #include "../types.h"
 
-#define FH8626_VENC_CHN_NUM 1
+#define FH8626_VENC_CHN_NUM 2
 
 extern hal_chnstate fh8626_state[FH8626_VENC_CHN_NUM];
 
@@ -24,3 +24,10 @@ int fh8626_hal_production_ready(void);
 int fh8626_hal_stub_get_stats(struct fh8626_stub_stats *stats);
 int fh8626_sdk_start(fh8626_video_sink sink);
 int fh8626_sdk_stop(void);
+int fh8626_native_active(void);
+int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
+    uint32_t quality, uint32_t fps, uint32_t bitrate);
+void fh8626_jpeg_deinit(void);
+void fh8626_jpeg_deinit_mode(uint32_t mode);
+int fh8626_jpeg_get(uint32_t width, uint32_t height, uint32_t quality,
+    hal_jpegdata *jpeg);

@@ -30,6 +30,38 @@ void hal_identify(void) {
         vid_thread = NULL;
         return;
     }
+#ifdef FH8626_NATIVE_KERNEL
+    {
+        FILE *machine = fopen("/sys/devices/soc0/machine", "r");
+        char name[64] = {0};
+        if (machine) {
+            if (!fgets(name, sizeof(name), machine))
+                name[0] = 0;
+            fclose(machine);
+        }
+        if (!strstr(name, "FH8626V100")) {
+            machine = fopen("/proc/cpuinfo", "r");
+            while (machine && fgets(name, sizeof(name), machine))
+                if (strstr(name, "FH8626V100"))
+                    break;
+            if (machine)
+                fclose(machine);
+        }
+        if (strstr(name, "FH8626V100") &&
+            !access("/dev/isp", F_OK) && !access("/dev/pae", F_OK) &&
+            !access("/dev/media_process", F_OK)) {
+            plat = HAL_PLATFORM_FH8626;
+            strcpy(chip, "FH8626V100");
+            strcpy(family, "fullhan-fh8626");
+            chnCount = FH8626_VENC_CHN_NUM;
+            chnState = fh8626_state;
+            aud_thread = NULL;
+            isp_thread = NULL;
+            vid_thread = NULL;
+            return;
+        }
+    }
+#endif
     FILE *file;
     char *endMark, line[200] = {0};
 

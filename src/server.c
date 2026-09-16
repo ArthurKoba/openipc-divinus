@@ -262,7 +262,8 @@ void send_mp4_to_client(char index, hal_vidstream *stream, char isH265) {
 
                 client_fds[i].mp4.sequence_number = 0;
                 client_fds[i].mp4.base_data_offset = header_buf.offset;
-                client_fds[i].mp4.base_media_decode_time = 0;
+                client_fds[i].mp4.video_media_decode_time = 0;
+                client_fds[i].mp4.audio_media_decode_time = 0;
                 client_fds[i].mp4.header_sent = true;
                 client_fds[i].mp4.nals_count = 0;
                 client_fds[i].mp4.default_sample_duration =

@@ -1,5 +1,9 @@
 #include "fh8626_hal.h"
+#ifdef FH8626_NATIVE_KERNEL
+#include "fh8626_kernel.h"
+#endif
 #include "../globals.h"
+#include "../../app_config.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -14,6 +18,10 @@
 #define FH8626_STUB_FRAME_INTERVAL_US 40000u
 
 hal_chnstate fh8626_state[FH8626_VENC_CHN_NUM];
+
+#ifdef FH8626_NATIVE_KERNEL
+static struct fh8626_kernel *kernel_context;
+#endif
 
 #ifdef FH8626_NATIVE_STUB
 struct fh8626_stub_context {
@@ -187,6 +195,34 @@ int fh8626_hal_production_ready(void)
 
 int fh8626_sdk_start(fh8626_video_sink sink)
 {
+#ifdef FH8626_NATIVE_KERNEL
+    struct fh8626_native_config config;
+
+    if (kernel_context)
+        return -EBUSY;
+    if (app_config.mp4_codecH265 || app_config.mp4_width != 1280u ||
+        app_config.mp4_height != 720u || app_config.mp4_fps != 25u ||
+        app_config.mp4_gop != 25u || app_config.mp4_mode == HAL_VIDMODE_ABR)
+        return -ENOTSUP;
+    config = (struct fh8626_native_config){
+        app_config.mp4_width, app_config.mp4_height, app_config.mp4_fps,
+        app_config.mp4_gop, app_config.mp4_profile,
+        app_config.mp4_mode == HAL_VIDMODE_VBR ? 0u :
+        app_config.mp4_mode == HAL_VIDMODE_AVBR ? 4u :
+        app_config.mp4_mode == HAL_VIDMODE_QP ? 2u : 1u,
+        app_config.mp4_bitrate};
+    {
+        int native_ret = fh8626_kernel_start(&kernel_context, &config, sink);
+        if (!native_ret) {
+            memset(fh8626_state, 0, sizeof(fh8626_state));
+            fh8626_state[0].enable = 1;
+            fh8626_state[0].mainLoop = 1;
+            fh8626_state[0].payload = HAL_VIDCODEC_H264;
+            strcpy(sensor, "GC1054");
+        }
+        return native_ret;
+    }
+#endif
 #ifndef FH8626_NATIVE_STUB
     (void)sink;
     return -ENOTSUP;
@@ -255,6 +291,62 @@ fail:
 #endif
 }
 
+int fh8626_native_active(void)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    return kernel_context != NULL;
+#else
+    return 0;
+#endif
+}
+
+int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
+    uint32_t quality, uint32_t fps, uint32_t bitrate)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (!kernel_context)
+        return -ENODEV;
+    return fh8626_kernel_jpeg_init(kernel_context, mode, width, height,
+        quality, fps, bitrate);
+#else
+    (void)mode; (void)width; (void)height; (void)quality;
+    (void)fps; (void)bitrate;
+    return -ENOTSUP;
+#endif
+}
+
+void fh8626_jpeg_deinit(void)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (kernel_context)
+        (void)fh8626_kernel_jpeg_deinit(kernel_context);
+#endif
+}
+
+void fh8626_jpeg_deinit_mode(uint32_t mode)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (kernel_context)
+        (void)fh8626_kernel_jpeg_deinit_mode(kernel_context, mode);
+#else
+    (void)mode;
+#endif
+}
+
+int fh8626_jpeg_get(uint32_t width, uint32_t height, uint32_t quality,
+    hal_jpegdata *jpeg)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (!kernel_context)
+        return -ENODEV;
+    return fh8626_kernel_jpeg_get(kernel_context, width, height, quality,
+        jpeg);
+#else
+    (void)width; (void)height; (void)quality; (void)jpeg;
+    return -ENOTSUP;
+#endif
+}
+
 int fh8626_hal_stub_get_stats(struct fh8626_stub_stats *stats)
 {
     if (!stats)
@@ -276,6 +368,14 @@ int fh8626_hal_stub_get_stats(struct fh8626_stub_stats *stats)
 
 int fh8626_sdk_stop(void)
 {
+#ifdef FH8626_NATIVE_KERNEL
+    if (kernel_context) {
+        int native_ret = fh8626_kernel_stop(kernel_context);
+        kernel_context = NULL;
+        memset(fh8626_state, 0, sizeof(fh8626_state));
+        return native_ret;
+    }
+#endif
 #ifndef FH8626_NATIVE_STUB
     return -ENOTSUP;
 #else

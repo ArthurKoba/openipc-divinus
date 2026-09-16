@@ -42,13 +42,17 @@ The native runtime controller is intentionally callback-driven. It encodes the p
 
 This layer does not claim unresolved FH8626 ISP, IDR, rate-control, VPSS scaling, audio, or full device-open/mmap ABI. Those remain separate evidence gates.
 
-## Native platform plumbing and stub mode
+## Native platform plumbing and bring-up modes
 
-The native FH8626 platform is registered as `HAL_PLATFORM_FH8626`, but production
-identification is intentionally not enabled until an exact target-safe detection
-marker is proven.  `FH8626_NATIVE_STUB` is a compile-time validation mode only.
-It selects the FH8626 platform before ordinary hardware probing and routes the
-normal `sdk_start()` / `sdk_stop()` entry points through the native runtime.
+The native FH8626 platform is registered as `HAL_PLATFORM_FH8626`. The
+`FH8626_NATIVE_KERNEL` build option routes the normal `sdk_start()` /
+`sdk_stop()` entry points through the real device provider and identifies the
+target from the machine marker plus required media device nodes. It is a
+hardware bring-up option, not yet a release claim.
+
+`FH8626_NATIVE_STUB` remains a compile-time validation mode. It selects the
+FH8626 platform before ordinary hardware probing and routes the same entry
+points through the fake kernel.
 
 Stub mode exercises the same contract/backend/adapter path as the future kernel
 backend.  Its fake kernel publishes a bounded Annex-B SPS/PPS/IDR access unit via
@@ -61,9 +65,25 @@ not acquire FH8626 hardware.
 ## Production provider gate
 
 The FH8626 platform exposes an explicit provider-status boundary. Stub mode is
-selectable only when `FH8626_NATIVE_STUB` is compiled in. Normal builds keep the
-provider at `none` and production selection remains disabled. The production
-gate reports a blocker mask for exact chip detection, device-open/ring-mmap
-setup, pipeline ownership, force-IDR, and runtime rate-control contracts. Until
-those contracts are proven, `fh8626_provider_production_ready()` is false and
-the native SDK cannot silently acquire FH8626 hardware.
+selectable only when `FH8626_NATIVE_STUB` is compiled in. The kernel provider is
+selectable only when `FH8626_NATIVE_KERNEL` is compiled in. The production gate
+still reports blockers for exact chip detection, device-open/ring-mmap setup,
+pipeline ownership, force-IDR, and runtime rate-control contracts. Until these
+are proven on the camera, `fh8626_provider_production_ready()` remains false
+even though the bring-up provider can be selected for testing.
+
+## 2026-09-12 owner-parity correction
+
+The control orchestration follows owner v4.3.0 around the shared algorithms:
+
+- 6905 selects the completed descriptor bank and `isp_runtime.isp_cfg` is
+  rebound to `allocation + 0x148770 + selected`;
+- AWB/E2 statistics are consumed at selected runtime root `+0x48`, not from a
+  fixed physical address when the alternate bank is active;
+- the frontend synchronization barrier changes runtime-context bytes
+  `ctx+0x18/+0x68`, not ISP MMIO registers at the same numeric offsets;
+- unresolved ioctl `0x40046908` is not treated as a userspace 100-ms frame wait;
+  the control loop uses the owner's absolute 40-ms monotonic schedule.
+
+This corrects orchestration only. It does not alter the imported AWB, CCM, ISP
+tables or NR3D policy, and it still requires target acceptance.
