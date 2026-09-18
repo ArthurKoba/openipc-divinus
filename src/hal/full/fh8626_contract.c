@@ -137,6 +137,16 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
     return 1;
 }
 
+const char *fh8626_capability_state_name(fh8626_capability_state state)
+{
+    switch (state) {
+        case FH8626_CAP_PROVEN: return "proven";
+        case FH8626_CAP_UNRESOLVED: return "unresolved";
+        case FH8626_CAP_UNSUPPORTED: return "unsupported";
+    }
+    return "unknown";
+}
+
 struct fh8626_capabilities fh8626_capabilities_current(void)
 {
     struct fh8626_capabilities caps;

@@ -295,6 +295,8 @@ int fh8626_native_active(void)
 {
 #ifdef FH8626_NATIVE_KERNEL
     return kernel_context != NULL;
+#elif defined(FH8626_NATIVE_STUB)
+    return stub.lock_ready && stub.running;
 #else
     return 0;
 #endif

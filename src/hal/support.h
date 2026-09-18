@@ -41,4 +41,6 @@ extern int asprintf(char **restrict strp, const char *restrict fmt, ...);
 #endif
 
 void hal_identify(void);
+const char *hal_platform_name(void);
+bool hal_temperature_available(void);
 float hal_temperature_read(void);

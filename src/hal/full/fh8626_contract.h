@@ -75,3 +75,4 @@ int fh8626_stream_decode(const uint32_t desc[FH8626_MEDIA_STREAM_DESC_WORDS], ui
     uint32_t ring_size, struct fh8626_stream_span *span);
 int fh8626_video_contract_known(const hal_vidconfig *config);
 struct fh8626_capabilities fh8626_capabilities_current(void);
+const char *fh8626_capability_state_name(fh8626_capability_state state);

@@ -2,6 +2,15 @@
 
 #include <stdint.h>
 
+/* OpenIPC's FH8626V100 target is ARM1176JZF-S (ARMv6KZ, soft-float EABI).
+ * Select the native kernel provider automatically for that target so the
+ * ordinary Buildroot Divinus package does not need a camera-specific flag.
+ * Runtime activation is still gated by FH8626 identity and device nodes. */
+#if !defined(FH8626_NATIVE_STUB) && !defined(FH8626_NATIVE_KERNEL) && \
+    defined(__arm__) && defined(__ARM_ARCH_6ZK__)
+#define FH8626_NATIVE_KERNEL 1
+#endif
+
 typedef enum {
     FH8626_PROVIDER_NONE = 0,
     FH8626_PROVIDER_STUB,

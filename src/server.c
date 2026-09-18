@@ -1444,26 +1444,148 @@ void respond_request(http_request_t *req) {
 
     if (EQUALS(req->uri, "/api/status")) {
         struct sysinfo si;
-        sysinfo(&si);
-        char memory[16], uptime[48];
-        short free = (si.freeram + si.bufferram) / 1024 / 1024;
-        short total = si.totalram / 1024 / 1024;
-        sprintf(memory, "%d/%dMB", total - free, total);
+        uint64_t mem_unit, total_bytes, available_bytes, used_bytes;
+        unsigned int enabled_channels = 0, main_channels = 0;
+        unsigned int h264_channels = 0, h265_channels = 0;
+        unsigned int jpeg_channels = 0, mjpeg_channels = 0;
+        char memory[32], uptime[48], temp_text[32], temp_json[32];
+        char media_json[768], capabilities_json[1024];
+        bool temp_available;
+        long cpu_online;
+
+        memset(&si, 0, sizeof(si));
+        (void)sysinfo(&si);
+        mem_unit = si.mem_unit ? si.mem_unit : 1u;
+        total_bytes = (uint64_t)si.totalram * mem_unit;
+        available_bytes = ((uint64_t)si.freeram + si.bufferram) * mem_unit;
+        if (available_bytes > total_bytes)
+            available_bytes = total_bytes;
+        used_bytes = total_bytes - available_bytes;
+        snprintf(memory, sizeof(memory), "%llu/%lluMB",
+            (unsigned long long)(used_bytes / (1024u * 1024u)),
+            (unsigned long long)(total_bytes / (1024u * 1024u)));
+
         if (si.uptime > 86400)
-            sprintf(uptime, "%ld days, %ld:%02ld:%02ld", si.uptime / 86400, (si.uptime % 86400) / 3600, (si.uptime % 3600) / 60, si.uptime % 60);
+            snprintf(uptime, sizeof(uptime), "%ld days, %ld:%02ld:%02ld",
+                si.uptime / 86400, (si.uptime % 86400) / 3600,
+                (si.uptime % 3600) / 60, si.uptime % 60);
         else if (si.uptime > 3600)
-            sprintf(uptime, "%ld:%02ld:%02ld", si.uptime / 3600, (si.uptime % 3600) / 60, si.uptime % 60);
+            snprintf(uptime, sizeof(uptime), "%ld:%02ld:%02ld",
+                si.uptime / 3600, (si.uptime % 3600) / 60, si.uptime % 60);
         else
-            sprintf(uptime, "%ld:%02ld", si.uptime / 60, si.uptime % 60);
-        respLen = sprintf(response,
+            snprintf(uptime, sizeof(uptime), "%ld:%02ld",
+                si.uptime / 60, si.uptime % 60);
+
+        cpu_online = sysconf(_SC_NPROCESSORS_ONLN);
+        if (cpu_online < 1)
+            cpu_online = 1;
+
+        if (chnState) {
+            for (int i = 0; i < chnCount; ++i) {
+                if (!chnState[i].enable)
+                    continue;
+                enabled_channels++;
+                if (chnState[i].mainLoop)
+                    main_channels++;
+                switch (chnState[i].payload) {
+                    case HAL_VIDCODEC_H264: h264_channels++; break;
+                    case HAL_VIDCODEC_H265: h265_channels++; break;
+                    case HAL_VIDCODEC_JPG: jpeg_channels++; break;
+                    case HAL_VIDCODEC_MJPG: mjpeg_channels++; break;
+                    default: break;
+                }
+            }
+        }
+
+        temp_available = hal_temperature_available();
+        if (temp_available) {
+            float temperature = hal_temperature_read();
+            if (temperature == temperature) {
+                snprintf(temp_text, sizeof(temp_text), "%.1f\u00B0C", temperature);
+                snprintf(temp_json, sizeof(temp_json), "%.2f", temperature);
+            } else {
+                temp_available = false;
+            }
+        }
+        if (!temp_available) {
+            strcpy(temp_text, "unsupported");
+            strcpy(temp_json, "null");
+        }
+
+        if (plat == HAL_PLATFORM_FH8626) {
+            struct fh8626_provider_status provider;
+            struct fh8626_capabilities caps = fh8626_capabilities_current();
+            memset(&provider, 0, sizeof(provider));
+            if (fh8626_provider_get_status(&provider)) {
+                provider.name = "unknown";
+                provider.blockers = FH8626_BLOCKER_PROVIDER_UNAVAILABLE;
+            }
+            snprintf(media_json, sizeof(media_json),
+                "{\"backend\":\"%s\",\"native_active\":%s,\"production_ready\":%s,"
+                "\"blockers\":%u,\"channels_total\":%u,\"channels_enabled\":%u,"
+                "\"channels_mainloop\":%u,\"encoders\":{\"h264\":%u,\"h265\":%u,"
+                "\"jpeg\":%u,\"mjpeg\":%u}}",
+                provider.name ? provider.name : "unknown",
+                fh8626_native_active() ? "true" : "false",
+                provider.production ? "true" : "false", provider.blockers,
+                (unsigned int)(unsigned char)chnCount, enabled_channels,
+                main_channels, h264_channels, h265_channels, jpeg_channels,
+                mjpeg_channels);
+            snprintf(capabilities_json, sizeof(capabilities_json),
+                "{\"h264_720p25\":\"%s\",\"stream_lease_release\":\"%s\","
+                "\"sensor_gc1054_init_order\":\"%s\",\"isp_direct_kernel_bringup\":\"%s\","
+                "\"same_boot_full_teardown\":\"%s\",\"force_idr\":\"%s\","
+                "\"rate_control_mapping\":\"%s\",\"vpss_1080p_scaling\":\"%s\","
+                "\"h265\":\"%s\",\"jpeg_snapshot\":\"%s\",\"mjpeg\":\"%s\","
+                "\"audio_rtx\":\"%s\",\"temperature\":\"%s\"}",
+                fh8626_capability_state_name(caps.h264_720p25),
+                fh8626_capability_state_name(caps.stream_lease_release),
+                fh8626_capability_state_name(caps.sensor_gc1054_init_order),
+                fh8626_capability_state_name(caps.isp_direct_kernel_bringup),
+                fh8626_capability_state_name(caps.same_boot_full_teardown),
+                fh8626_capability_state_name(caps.idr_request),
+                fh8626_capability_state_name(caps.rate_control_mapping),
+                fh8626_capability_state_name(caps.vpss_1080p_scaling),
+                fh8626_capability_state_name(caps.h265),
+                fh8626_capability_state_name(caps.jpeg_snapshot),
+                fh8626_capability_state_name(caps.mjpeg),
+                fh8626_capability_state_name(caps.audio),
+                fh8626_capability_state_name(caps.temperature));
+        } else {
+            snprintf(media_json, sizeof(media_json),
+                "{\"backend\":\"hal\",\"native_active\":%s,"
+                "\"channels_total\":%u,\"channels_enabled\":%u,\"channels_mainloop\":%u,"
+                "\"encoders\":{\"h264\":%u,\"h265\":%u,\"jpeg\":%u,\"mjpeg\":%u}}",
+                enabled_channels ? "true" : "false",
+                (unsigned int)(unsigned char)chnCount, enabled_channels,
+                main_channels, h264_channels, h265_channels, jpeg_channels,
+                mjpeg_channels);
+            strcpy(capabilities_json, "{}");
+        }
+
+        respLen = snprintf(response, sizeof(response),
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: application/json;charset=UTF-8\r\n"
             "Connection: close\r\n"
             "\r\n"
-            "{\"chip\":\"%s\",\"loadavg\":[%.2f,%.2f,%.2f],\"memory\":\"%s\","
-            "\"sensor\":\"%s\",\"temp\":\"%.1f\u00B0C\",\"uptime\":\"%s\"}",
-            chip, si.loads[0] / 65536.0, si.loads[1] / 65536.0, si.loads[2] / 65536.0,
-            memory, sensor, hal_temperature_read(), uptime);
+            "{\"chip\":\"%s\",\"family\":\"%s\",\"platform\":\"%s\","
+            "\"cpu\":{\"online\":%ld},"
+            "\"loadavg\":[%.2f,%.2f,%.2f],\"memory\":\"%s\","
+            "\"memory_bytes\":{\"used\":%llu,\"available\":%llu,\"total\":%llu},"
+            "\"sensor\":\"%s\",\"temp\":\"%s\","
+            "\"temperature_available\":%s,\"temperature_c\":%s,"
+            "\"uptime\":\"%s\",\"uptime_seconds\":%ld,"
+            "\"media\":%s,\"capabilities\":%s}",
+            chip, family, hal_platform_name(), cpu_online,
+            si.loads[0] / 65536.0, si.loads[1] / 65536.0, si.loads[2] / 65536.0,
+            memory, (unsigned long long)used_bytes,
+            (unsigned long long)available_bytes, (unsigned long long)total_bytes,
+            sensor, temp_text, temp_available ? "true" : "false", temp_json,
+            uptime, si.uptime, media_json, capabilities_json);
+        if (respLen < 0 || (size_t)respLen >= sizeof(response)) {
+            send_http_error(req->clntFd, 500);
+            return;
+        }
         send_and_close(req->clntFd, response, respLen);
         return;
     }

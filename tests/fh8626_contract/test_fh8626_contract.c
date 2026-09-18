@@ -98,6 +98,9 @@ static void test_capabilities(void)
     assert(caps.mjpeg == FH8626_CAP_UNRESOLVED);
     assert(caps.audio == FH8626_CAP_PROVEN);
     assert(caps.temperature == FH8626_CAP_UNSUPPORTED);
+    assert(!strcmp(fh8626_capability_state_name(FH8626_CAP_PROVEN), "proven"));
+    assert(!strcmp(fh8626_capability_state_name(FH8626_CAP_UNRESOLVED), "unresolved"));
+    assert(!strcmp(fh8626_capability_state_name(FH8626_CAP_UNSUPPORTED), "unsupported"));
 }
 
 int main(void)
