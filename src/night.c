@@ -1,4 +1,5 @@
 #include "night.h"
+#include "hal/full/fh8626_hal.h"
 
 char nightOn = 0;
 static bool grayscale = false, ircut = true, irled = false, manual = false;
@@ -15,7 +16,17 @@ bool night_manual_on(void) { return manual; }
 bool night_mode_on(void) { return grayscale && !ircut && irled; }
 
 void night_grayscale(bool enable) {
-    set_grayscale(enable);
+    if (plat == HAL_PLATFORM_FH8626) {
+        int rc = fh8626_set_grayscale(enable);
+        if (rc) {
+            HAL_WARNING("night",
+                "FH8626 grayscale transaction failed with %#x; state unchanged\n",
+                rc);
+            return;
+        }
+    } else {
+        set_grayscale(enable);
+    }
     grayscale = enable;
 }
 
