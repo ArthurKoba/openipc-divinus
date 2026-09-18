@@ -141,8 +141,19 @@ int save_video_stream(char index, hal_vidstream *stream) {
             }
             if (app_config.mp4_enable)
                 send_h26x_to_client(index, stream);
-            if (app_config.rtsp_enable)
-                rtp_send_h26x(rtspHandle, stream, isH265);
+            if (app_config.rtsp_enable) {
+                if (plat == HAL_PLATFORM_FH8626 && stream->count && stream->pack) {
+                    /* FH8626 native pack timestamps are microseconds. Feed the
+                     * capture clock into RTP's 90 kHz clock instead of
+                     * resampling at socket-send time. */
+                    uint64_t capture_us = stream->pack[0].timestamp;
+                    uint32_t timestamp90 =
+                        (uint32_t)((capture_us * 90u) / 1000u);
+                    rtp_send_h26x_at(rtspHandle, stream, isH265, timestamp90);
+                } else {
+                    rtp_send_h26x(rtspHandle, stream, isH265);
+                }
+            }
 
             if (app_config.stream_enable) {
                 for (int i = 0; i < stream->count; i++) {

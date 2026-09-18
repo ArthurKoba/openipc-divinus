@@ -383,7 +383,8 @@ void rtp_disable_audio(rtsp_handle h)
     h->audioPt = 255;
 }
 
-int rtp_send_h26x(rtsp_handle h, hal_vidstream *stream, char isH265)
+static int rtp_send_h26x_timestamp(rtsp_handle h, hal_vidstream *stream,
+    char isH265, uint32_t timestamp)
 {
     int ret = FAILURE;
     int track_id = 0;
@@ -391,7 +392,7 @@ int rtp_send_h26x(rtsp_handle h, hal_vidstream *stream, char isH265)
     struct rtp_au_tail tail;
 
     if (rtp_au_find_tail(stream, &tail)) return FAILURE;
-    trans.timestamp = (millis() * 90) & UINT32_MAX;
+    trans.timestamp = timestamp;
 
     /* checkout RTP packet */
     DASSERT(h, return FAILURE);
@@ -447,6 +448,18 @@ error:
     list_destroy(&(trans.list_head));
 
     return ret;
+}
+
+int rtp_send_h26x(rtsp_handle h, hal_vidstream *stream, char isH265)
+{
+    return rtp_send_h26x_timestamp(h, stream, isH265,
+        (millis() * 90) & UINT32_MAX);
+}
+
+int rtp_send_h26x_at(rtsp_handle h, hal_vidstream *stream, char isH265,
+    uint32_t timestamp)
+{
+    return rtp_send_h26x_timestamp(h, stream, isH265, timestamp);
 }
 
 int rtp_send_mp3(rtsp_handle h, unsigned char *buf, size_t len)

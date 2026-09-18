@@ -30,7 +30,7 @@ struct Mp4State {
 void mp4_set_config(short width, short height, char framerate, char acodec,
     unsigned short bitrate, char channels, unsigned int srate);
 
-/* Called under mp4Mtx. FH86 timestamps are microseconds, other HALs opt out.
+/* Called under mp4Mtx. FH8626 native timestamps are microseconds; other HALs opt out.
  * Prepare once per access unit, then share the fragment with HTTP/recording.
  * Returns 1 for a fragment, 0 for headers only, -1 for invalid input. */
 int mp4_prepare_pack(const hal_vidpack *pack, char is_h265, bool capture_timing);
