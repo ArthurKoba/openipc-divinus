@@ -55,6 +55,9 @@ struct fh8626_kernel {
     int control_thread_started;
     int media_bound;
     int pae_started;
+    int pae_system_initialized;
+    int pae_channel_initialized;
+    int vpu_system_initialized;
     int vpu_enabled;
     uint32_t vpu_open_mask;
     volatile int running;
@@ -726,9 +729,13 @@ static int kernel_system_init(void *opaque)
     rc = alloc_vmm(k, "vpu_sys", q, &k->vpu_sys);
     if (rc)
         return rc;
-    if (call_ioctl(k->isp_fd, FH8626_VPU_SYS_MEM_INIT, &k->vpu_sys) ||
-        call_ioctl(k->isp_fd, FH8626_VPU_SET_VI_ATTR, vi))
-        return -EIO;
+    rc = call_ioctl(k->isp_fd, FH8626_VPU_SYS_MEM_INIT, &k->vpu_sys);
+    if (rc)
+        return rc;
+    k->vpu_system_initialized = 1;
+    rc = call_ioctl(k->isp_fd, FH8626_VPU_SET_VI_ATTR, vi);
+    if (rc)
+        return rc;
     return 0;
 }
 
@@ -880,6 +887,7 @@ static int kernel_video_create(void *opaque)
         rc = -EIO;
         goto fail;
     }
+    k->pae_system_initialized = 1;
     memset(&query, 0, sizeof(query));
     query.chn = 0;
     query.width = k->config.width;
@@ -898,6 +906,7 @@ static int kernel_video_create(void *opaque)
         rc = -EIO;
         goto fail;
     }
+    k->pae_channel_initialized = 1;
     /* FH_PAE_CFG field0c is the encoder's fixed input quantum, not GOP.
      * The recovered fixed FH8626 contract uses H.264 Baseline (profile id 66).
      * Divinus rejects non-baseline/non-25-GOP requests at the HAL boundary
@@ -1167,6 +1176,25 @@ static int kernel_video_destroy(void *opaque)
         return -EINVAL;
 
     /*
+     * PAE_RECYCLE_CHN is the driver-owned channel destructor. It performs
+     * stop -> encoder flush -> stream flush, returns the 3-word VMM region,
+     * unmaps internal buffers, unregisters media object channel+7 and clears
+     * the complete encoder-channel state.
+     */
+    if (k->pae_channel_initialized && k->pae_fd >= 0) {
+        uint32_t recycle[4] = {FH8626_NATIVE_CHANNEL, 0u, 0u, 0u};
+
+        rc = call_ioctl(k->pae_fd, FH8626_PAE_RECYCLE_CHN, recycle);
+        if (rc) {
+            if (!first_error)
+                first_error = rc;
+        } else {
+            k->pae_channel_initialized = 0;
+            k->pae_started = 0;
+        }
+    }
+
+    /*
      * 0x694E is the distinct no-payload vpu_disable() operation. Never model
      * disable as VPU_ENABLE with a zero payload.
      */
@@ -1192,6 +1220,105 @@ static int kernel_video_destroy(void *opaque)
         } else {
             k->vpu_open_mask &= ~(1u << ch);
         }
+    }
+
+    return first_error;
+}
+
+static int kernel_system_deinit(void *opaque)
+{
+    struct fh8626_kernel *k = opaque;
+    int first_error = 0;
+    int rc;
+
+    if (!k)
+        return -EINVAL;
+
+    /*
+     * Both system-uninit ioctls return their original 3-word user VMM
+     * descriptor and refuse to run while child channels remain live.
+     */
+    if (k->vpu_system_initialized && k->isp_fd >= 0) {
+        struct fh8626_mem3 returned = {0};
+
+        rc = call_ioctl(k->isp_fd, FH8626_VPU_SYS_UNINIT, &returned);
+        if (rc) {
+            if (!first_error)
+                first_error = rc;
+        } else {
+            k->vpu_system_initialized = 0;
+        }
+    }
+
+    if (k->pae_system_initialized && k->pae_fd >= 0) {
+        struct fh8626_mem3 returned = {0};
+
+        rc = call_ioctl(k->pae_fd, FH8626_PAE_SYS_UNINIT, &returned);
+        if (rc) {
+            if (!first_error)
+                first_error = rc;
+        } else {
+            k->pae_system_initialized = 0;
+        }
+    }
+
+    return first_error;
+}
+
+static int kernel_hal_deinit(void *opaque)
+{
+    struct fh8626_kernel *k = opaque;
+    int first_error = 0;
+    int rc;
+
+    if (!k)
+        return -EINVAL;
+
+    /*
+     * fh81_isp_release() performs the remaining ISP-core shutdown on close,
+     * including producer disable, IRQ/MMIO cleanup and vpu_release().
+     * Close driver owners before returning their backing MMZ allocations.
+     */
+    if (k->pae_fd >= 0) {
+        if (close(k->pae_fd) < 0 && !first_error)
+            first_error = -errno;
+        k->pae_fd = -1;
+    }
+    if (k->isp_fd >= 0) {
+        if (close(k->isp_fd) < 0 && !first_error)
+            first_error = -errno;
+        k->isp_fd = -1;
+    }
+    if (k->media_fd >= 0) {
+        if (close(k->media_fd) < 0 && !first_error)
+            first_error = -errno;
+        k->media_fd = -1;
+    }
+    if (k->mem_fd >= 0) {
+        if (close(k->mem_fd) < 0 && !first_error)
+            first_error = -errno;
+        k->mem_fd = -1;
+    }
+
+    /*
+     * mmz_userdev cmd 0x0c is owner-scoped reset/free-all. Divinus owns a
+     * private vmm_fd, so this releases exactly the allocations made by this
+     * HAL instance after every userspace mapping has been unmapped.
+     */
+    free_mem(&k->pae_chn);
+    free_mem(&k->pae_sys);
+    free_mem(&k->vpu_chn_jpeg);
+    free_mem(&k->vpu_chn);
+    free_mem(&k->vpu_sys);
+    free_mem(&k->isp_cfg);
+
+    if (k->vmm_fd >= 0) {
+        rc = call_ioctl(k->vmm_fd, FH8626_VMM_RESET_OWNER, NULL);
+        if (rc && !first_error)
+            first_error = rc;
+        if (close(k->vmm_fd) < 0 && !first_error)
+            first_error = -errno;
+        k->vmm_fd = -1;
     }
 
     return first_error;
@@ -1656,7 +1783,8 @@ int fh8626_kernel_start(struct fh8626_kernel **out,
     ops = (struct fh8626_native_runtime_ops){
         kernel_hal_init, kernel_system_init, kernel_pipeline_create,
         kernel_video_create, kernel_stream_start, kernel_stage_stop,
-        kernel_video_destroy, kernel_noop, kernel_noop, kernel_noop};
+        kernel_video_destroy, kernel_noop, kernel_system_deinit,
+        kernel_hal_deinit};
     rc = fh8626_native_runtime_init(&k->runtime, &ops, k);
     if (!rc)
         rc = fh8626_native_runtime_start(&k->runtime);
@@ -1694,19 +1822,25 @@ int fh8626_kernel_stop(struct fh8626_kernel *k)
         first_error = rc;
 
     free(k->scratch);
-    free_mem(&k->pae_chn); free_mem(&k->pae_sys);
-    free_mem(&k->vpu_chn_jpeg);
-    free_mem(&k->vpu_chn);
-    free_mem(&k->vpu_sys); free_mem(&k->isp_cfg);
     if (k->mmio && munmap((void *)k->mmio, FH8626_ISP_MMIO_SIZE) < 0 &&
         !first_error)
         first_error = -errno;
+    k->mmio = NULL;
     fh_sensor_gc1054_close(&k->sensor);
-    if (k->mem_fd >= 0) close(k->mem_fd);
-    if (k->vmm_fd >= 0) close(k->vmm_fd);
-    if (k->pae_fd >= 0) close(k->pae_fd);
-    if (k->isp_fd >= 0) close(k->isp_fd);
-    if (k->media_fd >= 0) close(k->media_fd);
+
+    /*
+     * Normal runtime_stop already ran system_deinit/hal_deinit. On partial
+     * startup, call the same idempotent cleanup here for stages that never
+     * became owned by the runtime state machine.
+     */
+    if (k->pae_fd >= 0 || k->isp_fd >= 0 || k->vmm_fd >= 0) {
+        rc = kernel_system_deinit(k);
+        if (rc && !first_error)
+            first_error = rc;
+        rc = kernel_hal_deinit(k);
+        if (rc && !first_error)
+            first_error = rc;
+    }
     if (k->lock_fd >= 0) close(k->lock_fd);
     if (k->control_lock_ready)
         pthread_mutex_destroy(&k->control_lock);
