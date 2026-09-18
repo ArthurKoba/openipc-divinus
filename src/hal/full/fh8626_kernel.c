@@ -1313,7 +1313,14 @@ static int kernel_hal_deinit(void *opaque)
     free_mem(&k->isp_cfg);
 
     if (k->vmm_fd >= 0) {
-        rc = call_ioctl(k->vmm_fd, FH8626_VMM_RESET_OWNER, NULL);
+        /*
+         * mmz_userdev_ioctl validates both _IOC_SIZE (0x68) and a non-NULL
+         * userspace pointer even though command 0x0c only uses the fd-owned
+         * allocation list internally. Supply a real zeroed wire buffer.
+         */
+        uint8_t reset_wire[0x68] = {0};
+
+        rc = call_ioctl(k->vmm_fd, FH8626_VMM_RESET_OWNER, reset_wire);
         if (rc && !first_error)
             first_error = rc;
         if (close(k->vmm_fd) < 0 && !first_error)
