@@ -1573,8 +1573,6 @@ void respond_request(http_request_t *req) {
                         app_config.mp4_mode = HAL_VIDMODE_ABR;
                     else if (EQUALS_CASE(value, "AVBR"))
                         app_config.mp4_mode = HAL_VIDMODE_AVBR;
-                    else if (EQUALS_CASE(value, "CVBR"))
-                        app_config.mp4_mode = HAL_VIDMODE_CVBR;
                 } else if (EQUALS(key, "profile")) {
                     if (EQUALS_CASE(value, "BP") || EQUALS_CASE(value, "BASELINE"))
                         app_config.mp4_profile = HAL_VIDPROFILE_BASELINE;

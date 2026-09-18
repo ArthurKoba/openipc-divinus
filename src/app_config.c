@@ -489,11 +489,18 @@ enum ConfigError app_config_parse(void) {
                 app_config.mp4_codecH265 = false;
         }
         {
-            const char *possible_values[] = {"CBR", "VBR", "QP", "ABR", "AVBR", "CVBR"};
-            const int count = sizeof(possible_values) / sizeof(const char *);
+            static const char *const common_values[] =
+                {"CBR", "VBR", "QP", "ABR", "AVBR"};
+            static const char *const fh8626_values[] =
+                {"CBR", "VBR", "QP", "ABR", "AVBR", "CVBR"};
+            const char *const *possible_values =
+                plat == HAL_PLATFORM_FH8626 ? fh8626_values : common_values;
+            const int count = plat == HAL_PLATFORM_FH8626 ?
+                (int)(sizeof(fh8626_values) / sizeof(fh8626_values[0])) :
+                (int)(sizeof(common_values) / sizeof(common_values[0]));
             int val = 0;
             parse_enum(&ini, "mp4", "mode", (void *)&val,
-                possible_values, count, 0);
+                (const char **)possible_values, count, 0);
             app_config.mp4_mode = val;
         }
         err = parse_int(
