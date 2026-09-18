@@ -208,7 +208,6 @@ int fh8626_sdk_start(fh8626_video_sink sink)
     struct fh8626_native_config config;
     hal_vidconfig requested;
 
-    memset(fh8626_osd_request, 0, sizeof(fh8626_osd_request));
     if (app_config.mp4_width > UINT16_MAX ||
         app_config.mp4_height > UINT16_MAX ||
         app_config.mp4_fps > UINT8_MAX ||
@@ -249,6 +248,7 @@ int fh8626_sdk_start(fh8626_video_sink sink)
             pthread_mutex_unlock(&kernel_context_lock);
             return -EBUSY;
         }
+        memset(fh8626_osd_request, 0, sizeof(fh8626_osd_request));
         native_ret = fh8626_kernel_start(&kernel_context, &config, sink);
         if (!native_ret) {
             memset(fh8626_state, 0, sizeof(fh8626_state));
