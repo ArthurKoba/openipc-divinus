@@ -78,5 +78,6 @@ int fh8626_lifecycle_balanced(const struct fh8626_lifecycle *life);
 int fh8626_stream_decode(const uint32_t desc[FH8626_MEDIA_STREAM_DESC_WORDS], uintptr_t ring_base,
     uint32_t ring_size, struct fh8626_stream_span *span);
 int fh8626_video_contract_known(const hal_vidconfig *config);
+uint32_t fh8626_timestamp_us_to_rtp90(uint64_t timestamp_us);
 struct fh8626_capabilities fh8626_capabilities_current(void);
 const char *fh8626_capability_state_name(fh8626_capability_state state);

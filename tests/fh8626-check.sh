@@ -9,7 +9,9 @@ for suite in \
     fh8626_native_adapter \
     fh8626_native_runtime \
     fh8626_provider_boundary \
-    fh8626_stream_backend
+    fh8626_stream_backend \
+    rtsp_thread \
+    rtsp_transport
 do
     make -C "$root/tests/$suite" clean
     make -C "$root/tests/$suite" test

@@ -148,7 +148,7 @@ int save_video_stream(char index, hal_vidstream *stream) {
                      * resampling at socket-send time. */
                     uint64_t capture_us = stream->pack[0].timestamp;
                     uint32_t timestamp90 =
-                        (uint32_t)((capture_us * 90u) / 1000u);
+                        fh8626_timestamp_us_to_rtp90(capture_us);
                     rtp_send_h26x_at(rtspHandle, stream, isH265, timestamp90);
                 } else {
                     rtp_send_h26x(rtspHandle, stream, isH265);

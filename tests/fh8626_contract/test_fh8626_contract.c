@@ -96,6 +96,13 @@ static void test_video_contract(void)
     assert(!fh8626_video_contract_known(&cfg));
 }
 
+static void test_timestamp_conversion(void)
+{
+    assert(fh8626_timestamp_us_to_rtp90(0u) == 0u);
+    assert(fh8626_timestamp_us_to_rtp90(40000u) == 3600u);
+    assert(fh8626_timestamp_us_to_rtp90(1000000u) == 90000u);
+}
+
 static void test_capabilities(void)
 {
     struct fh8626_capabilities caps = fh8626_capabilities_current();
@@ -125,6 +132,7 @@ int main(void)
     test_lifecycle();
     test_stream_descriptor();
     test_video_contract();
+    test_timestamp_conversion();
     test_capabilities();
     puts("fh8626_contract PASS");
     return 0;

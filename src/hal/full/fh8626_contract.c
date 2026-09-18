@@ -144,6 +144,11 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
     return 1;
 }
 
+uint32_t fh8626_timestamp_us_to_rtp90(uint64_t timestamp_us)
+{
+    return (uint32_t)((timestamp_us * 90u) / 1000u);
+}
+
 const char *fh8626_capability_state_name(fh8626_capability_state state)
 {
     switch (state) {
