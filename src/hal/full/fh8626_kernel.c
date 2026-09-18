@@ -9,6 +9,7 @@
 #include "native/control/fh8626_control_status_tail.h"
 #include "native/media/fh8626_geometry_linux.h"
 #include "native/media/fh8626_media_timing.h"
+#include "native/sensor/gc1054/fh8626_sensor_gc1054_day_profile.h"
 #include "../globals.h"
 #include "../../app_config.h"
 #include "../macros.h"
@@ -602,37 +603,15 @@ static int kernel_hal_init(void *opaque)
 
 static int load_profile(struct fh8626_kernel *k)
 {
-    FILE *file;
-    long size;
-    uint8_t *data;
-    size_t read_size;
-    int rc;
-
-    file = fopen("/usr/share/fh8626/sensor_gc1054_mipi.bin", "rb");
-    if (!file)
-        file = fopen("/usr/share/fh8626/gc1054_day.bin", "rb");
-    if (!file)
-        return -errno;
-    if (fseek(file, 0, SEEK_END) || (size = ftell(file)) <= 0 ||
-        fseek(file, 0, SEEK_SET)) {
-        fclose(file);
+    if (!k)
         return -EINVAL;
-    }
-    data = malloc((size_t)size);
-    if (!data) {
-        fclose(file);
-        return -ENOMEM;
-    }
-    read_size = fread(data, 1, (size_t)size, file);
-    fclose(file);
-    if (read_size != (size_t)size) {
-        free(data);
-        return -EIO;
-    }
-    rc = fh_isp_runtime_load_sreg_profile(&k->isp_runtime, data, read_size,
-                                          "day");
-    free(data);
-    return rc;
+
+    /*
+     * The retained 0xA58 day object is already the raw ISP parameter payload.
+     * Do not pass it through the SREG-container parser.
+     */
+    return fh_isp_runtime_load_param(&k->isp_runtime,
+        fh8626_gc1054_day_profile, FH8626_GC1054_DAY_PROFILE_SIZE);
 }
 
 static int kernel_system_init(void *opaque)
