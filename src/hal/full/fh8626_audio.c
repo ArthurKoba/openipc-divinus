@@ -316,6 +316,7 @@ static void *capture_main(void *opaque)
     if (capture_last_error)
         fprintf(stderr, "FH8626 RTX capture stopped with error %#x\n",
             capture_last_error);
+    capture_release();
     return NULL;
 }
 
