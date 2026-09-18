@@ -62,6 +62,11 @@ void night_mode(bool enable) {
      * that transaction could not be committed. */
     if (night_grayscale(enable) != EXIT_SUCCESS)
         return;
+    /* Stock ANJIA night transition allows the ISP saturation/grayscale state
+     * to settle for 100 ms before moving IR hardware. The recovered delay is
+     * specific to the NIGHT branch; do not invent a symmetric DAY delay. */
+    if (plat == HAL_PLATFORM_FH8626 && enable)
+        usleep(100000u);
     night_ircut(!enable);
     night_irled(enable);
 }

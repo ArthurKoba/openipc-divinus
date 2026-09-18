@@ -722,7 +722,7 @@ int media_mjpeg_enable(void) {
 int media_mp4_disable(void) {
     if (plat == HAL_PLATFORM_FH8626) {
         HAL_WARNING("media",
-            "FH8626 runtime H.264 reconfiguration is not accepted yet; restart Divinus to apply MP4 settings.\n");
+            "FH8626 MP4 lifecycle is owned by the native SDK; use the FH /api/mp4 transactional reconfigure path.\n");
         return EXIT_FAILURE;
     }
 
@@ -750,7 +750,7 @@ int media_mp4_enable(void) {
 
     if (plat == HAL_PLATFORM_FH8626) {
         HAL_WARNING("media",
-            "FH8626 runtime H.264 reconfiguration is not accepted yet; restart Divinus to apply MP4 settings.\n");
+            "FH8626 MP4 lifecycle is owned by the native SDK; use the FH /api/mp4 transactional reconfigure path.\n");
         return EXIT_FAILURE;
     }
 
