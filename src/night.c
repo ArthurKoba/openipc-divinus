@@ -20,9 +20,17 @@ void night_grayscale(bool enable) {
 }
 
 void night_ircut(bool enable) {
-    gpio_write(app_config.ir_cut_pin1, !enable);
-    gpio_write(app_config.ir_cut_pin2, enable);
-    usleep(app_config.pin_switch_delay_us * 100);
+    if (plat == HAL_PLATFORM_FH8626) {
+        /* On ANJIA, enable=true means DAY/IR-cut engaged: pulse GPIO18.
+         * enable=false means NIGHT/IR-cut open: pulse GPIO60. */
+        gpio_write(app_config.ir_cut_pin1, enable);
+        gpio_write(app_config.ir_cut_pin2, !enable);
+        usleep(app_config.pin_switch_delay_us);
+    } else {
+        gpio_write(app_config.ir_cut_pin1, !enable);
+        gpio_write(app_config.ir_cut_pin2, enable);
+        usleep(app_config.pin_switch_delay_us * 100);
+    }
     gpio_write(app_config.ir_cut_pin1, false);
     gpio_write(app_config.ir_cut_pin2, false);
     ircut = enable;

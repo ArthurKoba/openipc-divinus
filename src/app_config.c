@@ -287,10 +287,20 @@ enum ConfigError app_config_parse(void) {
 
     app_config.night_mode_enable = false;
     app_config.ir_sensor_pin = 999;
-    app_config.ir_cut_pin1 = 999;
-    app_config.ir_cut_pin2 = 999;
-    app_config.ir_led_pin = 999;
-    app_config.pin_switch_delay_us = 250;
+    if (plat == HAL_PLATFORM_FH8626) {
+        /* ANJIA AJL33PQ0866 stock board wiring recovered from the board helper:
+         * GPIO18 = DAY/closed IR-cut coil, GPIO60 = NIGHT/open coil,
+         * GPIO25 = IR LED, with a 190 ms bistable-coil pulse. */
+        app_config.ir_cut_pin1 = 18;
+        app_config.ir_cut_pin2 = 60;
+        app_config.ir_led_pin = 25;
+        app_config.pin_switch_delay_us = 190000;
+    } else {
+        app_config.ir_cut_pin1 = 999;
+        app_config.ir_cut_pin2 = 999;
+        app_config.ir_led_pin = 999;
+        app_config.pin_switch_delay_us = 250;
+    }
     app_config.check_interval_s = 10;
     app_config.adc_device[0] = 0;
     app_config.adc_threshold = 128;
@@ -375,7 +385,8 @@ enum ConfigError app_config_parse(void) {
             &ini, "night_mode", "ir_led_pin", 0, PIN_MAX,
             &app_config.ir_led_pin);
         parse_int(
-            &ini, "night_mode", "pin_switch_delay_us", 0, 1000,
+            &ini, "night_mode", "pin_switch_delay_us", 0,
+            plat == HAL_PLATFORM_FH8626 ? 1000000 : 1000,
             &app_config.pin_switch_delay_us);
         parse_param_value(
             &ini, "night_mode", "adc_device", app_config.adc_device);
