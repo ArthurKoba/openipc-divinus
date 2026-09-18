@@ -1,98 +1,81 @@
 # FH8626V100 native HAL status
 
-This document tracks the current Divinus-native FH8626V100 implementation and its evidence boundary. It does not claim hardware acceptance of the latest candidate.
+This document tracks the current Divinus-native FH8626V100 software implementation and its evidence boundary. `proven` capability state means the contract is recovered and implemented in source. It does not mean the current candidate has passed camera hardware acceptance.
 
-## Current architecture
+## Architecture
 
-FH8626V100 is a normal Divinus HAL platform (`HAL_PLATFORM_FH8626`). The former external `source: fh86` Unix/socket media-owner frontend has been removed. Divinus now owns the generic sensor/ISP/VPU/PAE/VENC path directly through `src/hal/full/`.
+FH8626V100 is a native Divinus HAL platform (`HAL_PLATFORM_FH8626`). Divinus owns the GC1054/MIPI, ISP, VPU/VPSS, PAE/VENC, JPEG/MJPEG, OSD and RTX capture paths directly. The old external `source: fh86` socket/media owner and vendor `libmipi.so` / `libgc1054_mipi.so` runtime dependency are not part of the active implementation.
 
-The OpenIPC FH8626 target is ARM1176JZF-S / ARMv6KZ soft-EABI on musl. For that target the native kernel provider is selected automatically at compile time. Runtime identification still requires the FH8626V100 machine identity plus the required media device nodes.
+The OpenIPC target is ARM1176JZF-S / ARMv6KZ soft-EABI on musl. The kernel provider is selected for that target and runtime selection still requires the FH8626V100 identity and required device nodes.
 
-Board policy remains outside this HAL. Divinus does not contain the AJL33PQ0866 GPIO5 cold-reset sequence, GPIO4/GPIO14 lens policy, PTZ mapping, illumination policy or speaker-amplifier GPIO policy.
+## Implemented source contracts
 
-## Implemented platform contracts
+The current source contains recovered implementations for:
 
-The current source contains the recovered native contracts for:
+- source-owned GC1054/MIPI initialization, callbacks, 720p25 and 720p30 sensor modes;
+- the exact embedded 0xA58 GC1054 day ISP parameter payload;
+- ISP context/MMIO initialization, AE/AWB/statistics control and profile LUT publication;
+- Bayer-coherent runtime mirror/flip;
+- recovered 50/60 Hz anti-flicker: the public Divinus value selects OFF/50/60 and updates the stock AE enable bit plus the numeric frequency field consumed as `500000/frequency`;
+- stock-equivalent night grayscale through the shared saturation context, with reversible DAY restore;
+- ANJIA AJL33PQ0866 IR-cut/IR LED defaults: GPIO18 DAY coil, GPIO60 NIGHT coil, GPIO25 IR LED, 190 ms bistable pulse and the recovered 100 ms NIGHT ISP-to-IR settle delay;
+- VPU/VPSS system/channel ownership, memory setup, frame control and scaling up to the proved 1920x1080 output boundary;
+- H.264 Baseline/Main, configurable GOP, CBR/VBR/AVBR/CVBR/fixed-QP, force-IDR and realtime VBR/AVBR bitrate update;
+- transactional structural `/api/mp4` reconfiguration with stop/rebuild/start, client epoch isolation, persistent night-state restoration and rollback;
+- `MEDIA_STREAM_6` dequeue, ring-wrap handling and exactly-once stream release;
+- JPEG snapshots and continuous MJPEG, including quality mapping, QP/VBR/CBR policies and transactional runtime reconfiguration;
+- native GraphV2 OSD through `0xC448696D/0xC448696E`, with two global slots and four per-channel slots; Divinus uses main-channel IDs 0..3;
+- owner-scoped OSD VMM allocation, transactional bitmap replacement and persistence/retry across structural media-owner restarts;
+- native RTX microphone capture through `/dev/rtxbus`, including the recovered retail DSP initialization payload, NR, AI enable/disable and raw AI-volume control;
+- balanced same-boot teardown of PAE/VPU/VMM/media ownership;
+- monotonic video timestamps used by RTSP/fMP4 and platform/media telemetry.
 
-- GC1054 1280x720 at 25 fps initialization/order;
-- ISP context/MMIO initialization and corrected runtime statistics-bank ownership;
-- VPU/PAE allocation, channel creation, bind and H.264 startup;
-- H.264 CBR/VBR/AVBR wire mapping used by cold startup; fixed-QP is rejected until Divinus has an evidence-backed I/P-QP configuration contract;
-- `MEDIA_STREAM_6` dequeue, ring-wrap handling and exactly-once `PAE_STREAM_STEP` release;
-- owned-copy conversion to normal Divinus `hal_vidstream`;
-- force-IDR through the recovered `FH_PAE_FORCE_I` operation;
-- JPEG/MJPEG source implementation;
-- RTX audio transport contract;
-- best-effort teardown semantics with explicit H.264 bind/start/enable ownership tracking and source-1 media unbind;
-- platform/system/media telemetry through `/api/status`;
-- an owned monotonic video media clock for MP4/RTSP while preserving descriptor word 10 as uninterpreted raw evidence.
+H.265 and SoC temperature remain explicitly unsupported.
 
-The current provider reports its unresolved production blockers explicitly rather than hiding them behind a generic ready flag.
+## Remaining semantic limitation
 
-## Transitional dependencies
+The only intentionally incomplete user-facing mapping in the implemented audio path is `audio.gain`. Divinus exposes this setting in dB, while the recovered FH RTX command accepts a raw hardware AI-volume value. The stock capture path uses raw value 31. No dB-to-raw transfer function has been proved, so FH8626 accepts `gain=0` and does not fabricate a conversion.
 
-### GC1054 sensor plug-in
+This is separate from the RTX capture transport itself, which is implemented in source.
 
-The current sensor backend still loads the exact V100-era `libmipi.so` and `libgc1054_mipi.so` callback ABI. This is a bring-up bridge, not the final OpenIPC-native sensor implementation. The clean target should eventually replace it with an open typed MIPI/GC1054 backend without importing opaque uClibc objects into the musl process.
+## OSD
 
-### RTX audio capture
+FH8626 OSD uses the native GraphV2 kernel request rather than a proprietary ADV_OSD runtime dependency.
 
-Divinus now owns the validated FH8626 RTX microphone capture transaction directly through `/dev/rtxbus`: reset, AC init, recovered initialization payload, capture NR configuration, 8 kHz/16-bit/mono/320-byte framing, AI enable/volume, shared-memory frame polling and AI disable on teardown. The former external `fh8626-audio` helper dependency is removed from the Divinus path.
+- SET: `0xC448696D`
+- GET: `0xC448696E`
+- wire size: `0x448` bytes
+- wire layout: selector + 273-word public GraphV2 record
+- main video selector: 1
+- per-channel hardware slots exposed by Divinus: 4
 
-This source integration is still target-unaccepted as a Divinus candidate. The provider therefore keeps a dedicated audio hardware-acceptance blocker. Speaker/amplifier GPIO policy is deliberately not part of this backend.
+Each visible slot owns a dedicated VMM owner. An update fills a new allocation and commits the GraphV2 request before the previous owner is released. Transient owner/resource failures keep the overlay pending rather than silently discarding the update.
 
-### ISP profile data
+## Runtime ownership
 
-The native ISP algorithms and many stock tables are source-owned, but startup still loads the complete GC1054 day SREG payload from `/usr/share/fh8626/sensor_gc1054_mipi.bin` or `gc1054_day.bin`. The full 0xa58 day payload is not reconstructed in this repository yet, so this remains an explicit profile-data blocker rather than being hidden inside the sensor blocker.
+FH native calls are serialized around the process-wide kernel context so OSD/JPEG/image controls cannot use a freed media owner while a structural restart is in progress.
 
-## Runtime reconfiguration boundary
+A structural video restart disconnects decoder-stateful clients, tears down the current native owner, rebuilds it from the new configuration, restores persistent grayscale state, invalidates persistent overlays for re-upload, and rolls back to the previous configuration if the new owner cannot be made coherent.
 
-Cold-start H.264 configuration is implemented. Live `/api/mp4` reconfiguration is deliberately rejected on FH8626V100 until the same-boot stop/reconfigure/restart transaction is hardware-accepted. This prevents the platform from falling through the generic channel lifecycle, which does not own FH8626 resources.
+The night worker also has an explicit stop lifecycle; `/api/night` no longer joins a worker loop that ignores its stop flag.
 
-Force-IDR is independent of that restriction and is wired to the native PAE control path.
+## Capability and blocker semantics
 
-## Temperature
+`/api/status` separates recovered/source capability state from production readiness. Current source-level capabilities include the native sensor backend, direct ISP bring-up, same-boot teardown, H.264 RC/IDR, 1080p VPSS scaling, JPEG/MJPEG, runtime audio/video reconfiguration, GraphV2 OSD, grayscale, anti-flicker and ANJIA night wiring as `proven`.
 
-FH8626V100 temperature is explicitly unsupported. No RTC/TSENSOR/thermal-zone value is exposed as a SoC temperature without hardware evidence. `/api/status` reports:
+The kernel provider remains non-production because target acceptance is intentionally deferred. Its remaining blockers are:
 
-- `temperature_available: false`;
-- `temperature_c: null`;
-- FH8626 temperature capability: `unsupported`.
+- RTX/audio hardware acceptance in the integrated Divinus candidate;
+- complete FH8626 candidate hardware acceptance.
 
-## Observability
+These blockers are not software TODO markers and must only be removed from observed target evidence.
 
-For FH8626V100, `/api/status` exposes:
+## Build and source checks
 
-- chip, family and platform identity;
-- online CPU count;
-- load averages;
-- memory used/available/total with `sysinfo.mem_unit` applied;
-- uptime;
-- sensor identity;
-- media backend and native-active state;
-- enabled/main-loop channel counts and codec counts;
-- provider blocker mask and production-ready state;
-- evidence-class capability states.
+`tests/fh8626-check.sh` contains focused ABI/lifecycle regressions for fragile recovered contracts. These checks are secondary to the implementation itself and do not replace the target build.
 
-## Host checks
+The software-closure gate before camera testing is a successful OpenIPC ARM1176/musl build of the exact work-branch candidate. Camera execution/quality acceptance is intentionally a later phase.
 
-Run the focused source/contract suite with:
+## Deferred hardware acceptance
 
-`tests/fh8626-check.sh`
-
-It covers FH contract/stub/adapter/lifecycle/provider/stream-backend tests plus RTSP thread and transport-framing/AU regressions. Passing these checks is source validation only; it does not promote the latest native candidate to hardware acceptance.
-
-## Current hardware gates
-
-The next target run should prove the exact candidate end-to-end:
-
-1. candidate identity and native provider selection;
-2. GC1054/ISP bring-up and stable 720p25 H.264;
-3. RTSP/raw H.264/fMP4 behavior and reconnect/force-IDR;
-4. ISP exposure/color behavior;
-5. JPEG/MJPEG only if enabled in the tested configuration;
-6. native RTX microphone capture, independently from any board speaker/amplifier policy;
-7. graceful stop and same-boot restart;
-8. board lens/PTZ/illumination behavior through their owning board integration.
-
-Only observed target evidence should remove the hardware-acceptance and teardown blockers.
+When hardware testing resumes, the candidate should be exercised for sensor/ISP bring-up, H.264 modes and 1080p scaling, RTSP/fMP4 reconnects, JPEG/MJPEG, OSD update/destroy/restart, DAY/NIGHT/DAY with anti-flicker and grayscale, RTX capture, and same-boot stop/start resource balance.

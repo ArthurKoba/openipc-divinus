@@ -45,7 +45,7 @@ In spite of these design choices, Divinus boasts numerous features that cater to
 | infinity6e[^15]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | infinity6c[^16]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | mercury6[^17]           | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
-| FH8626V100              | ↻            | ↻             | ↻           | ↻           | ✗                  |
+| FH8626V100              | ↻            | ↻             | ↻           | ↻           | ↻                  |
 | sun8iw21p1[^18]         | ↻            | ↻            | ↻           | ↻           | ↻                 |
 
 _✔️ - supported, ↻ - in development, ✗ - unsupported, ⁿ/ₐ - not supported by hardware_
