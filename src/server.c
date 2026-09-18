@@ -86,11 +86,40 @@ static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
     return fh8626_video_contract_known(&wire) ? 0 : -ENOTSUP;
 }
 
+static void fh8626_api_video_disconnect_clients(void)
+{
+    unsigned int i;
+
+    /*
+     * A structural restart can change SPS/PPS, dimensions, profile and sample
+     * duration. HTTP elementary/fMP4/MJPEG sessions cannot safely carry their
+     * old decoder/mux state across that boundary. Force a reconnect so each
+     * consumer starts from the new random-access epoch.
+     */
+    pthread_mutex_lock(&client_fds_mutex);
+    for (i = 0; i < HTTP_MAX_CLIENTS; ++i) {
+        if (client_fds[i].sockFd < 0)
+            continue;
+        if (client_fds[i].type == STREAM_H26X ||
+            client_fds[i].type == STREAM_MP4 ||
+            client_fds[i].type == STREAM_MJPEG) {
+            close_socket_fd(client_fds[i].sockFd);
+            client_fds[i].sockFd = -1;
+            client_fds[i].type = -1;
+            client_fds[i].nalCnt = 0;
+            memset(&client_fds[i].mp4, 0, sizeof(client_fds[i].mp4));
+        }
+    }
+    pthread_mutex_unlock(&client_fds_mutex);
+}
+
 static int fh8626_api_video_restart(const struct fh8626_api_video_cfg *next,
     const struct fh8626_api_video_cfg *old)
 {
     int rc, rollback_rc;
 
+    media_capture_discontinuity();
+    fh8626_api_video_disconnect_clients();
     fh8626_api_video_to_app(next);
     rc = sdk_stop();
     if (rc != EXIT_SUCCESS) {
@@ -99,13 +128,16 @@ static int fh8626_api_video_restart(const struct fh8626_api_video_cfg *next,
     }
 
     rc = sdk_start();
-    if (rc == EXIT_SUCCESS)
+    if (rc == EXIT_SUCCESS) {
+        media_capture_discontinuity();
         return 0;
+    }
 
     fh8626_api_video_to_app(old);
     rollback_rc = sdk_start();
     if (rollback_rc != EXIT_SUCCESS)
         return -EUCLEAN;
+    media_capture_discontinuity();
     return -EIO;
 }
 
