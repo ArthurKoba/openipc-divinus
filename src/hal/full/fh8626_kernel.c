@@ -563,8 +563,7 @@ static int kernel_hal_init(void *opaque)
     if (flock(k->lock_fd, LOCK_EX | LOCK_NB) < 0)
         return errno == EWOULDBLOCK ? -EBUSY : -errno;
 
-    rc = fh_sensor_gc1054_open(&k->sensor, "/usr/lib/fh8626/libmipi.so",
-                               "/usr/lib/fh8626/libgc1054_mipi.so");
+    rc = fh_sensor_gc1054_open(&k->sensor);
     if (rc)
         return rc;
     rc = fh_sensor_gc1054_init(&k->sensor);
