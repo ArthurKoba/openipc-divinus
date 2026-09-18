@@ -839,7 +839,16 @@ static void *kernel_stream_thread(void *opaque)
     struct fh8626_kernel *k = opaque;
     int producer_probe_done = 0;
     while (kernel_stream_thread_running(k)) {
+        struct timespec now;
         int rc;
+
+        /* Descriptor word 10 is retained as raw evidence but its unit is not
+         * established. Give Divinus an owned microsecond media clock from
+         * monotonic dequeue time rather than pretending the raw word is us or
+         * synthesizing timestamps solely from configured FPS. */
+        if (!clock_gettime(CLOCK_MONOTONIC, &now))
+            k->adapter.pts_us = (uint64_t)now.tv_sec * 1000000u +
+                (uint64_t)now.tv_nsec / 1000u;
 
         rc = fh8626_native_adapter_pump(&k->adapter, k->sink);
         if (rc) {

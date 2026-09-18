@@ -24,7 +24,8 @@ The current source contains the recovered native contracts for:
 - JPEG/MJPEG source implementation;
 - RTX audio transport contract;
 - best-effort teardown semantics;
-- platform/system/media telemetry through `/api/status`.
+- platform/system/media telemetry through `/api/status`;
+- an owned monotonic video media clock for MP4/RTSP while preserving descriptor word 10 as uninterpreted raw evidence.
 
 The current provider reports its unresolved production blockers explicitly rather than hiding them behind a generic ready flag.
 
