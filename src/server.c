@@ -1,5 +1,6 @@
 #include "server.h"
 #include "hal/full/fh8626_audio.h"
+#include "hal/full/fh8626_contract.h"
 
 #define HTTP_MAX_CLIENTS 50
 #define HTTP_MIN_BUF_SIZE 4096
@@ -9,6 +10,88 @@ IMPORT_STR(.rodata, "../res/index.html", indexhtml);
 extern const char indexhtml[];
 IMPORT_STR(.rodata, "../res/onvif/badauth.xml", badauthxml);
 extern const char badauthxml[];
+
+struct fh8626_api_video_cfg {
+    bool enable;
+    unsigned int width;
+    unsigned int height;
+    unsigned int fps;
+    unsigned int gop;
+    bool h265;
+    unsigned int mode;
+    unsigned int profile;
+    unsigned int bitrate;
+};
+
+static void fh8626_api_video_from_app(struct fh8626_api_video_cfg *cfg)
+{
+    cfg->enable = app_config.mp4_enable;
+    cfg->width = app_config.mp4_width;
+    cfg->height = app_config.mp4_height;
+    cfg->fps = app_config.mp4_fps;
+    cfg->gop = app_config.mp4_gop;
+    cfg->h265 = app_config.mp4_codecH265;
+    cfg->mode = app_config.mp4_mode;
+    cfg->profile = app_config.mp4_profile;
+    cfg->bitrate = app_config.mp4_bitrate;
+}
+
+static void fh8626_api_video_to_app(const struct fh8626_api_video_cfg *cfg)
+{
+    app_config.mp4_enable = cfg->enable;
+    app_config.mp4_width = cfg->width;
+    app_config.mp4_height = cfg->height;
+    app_config.mp4_fps = cfg->fps;
+    app_config.mp4_gop = cfg->gop;
+    app_config.mp4_codecH265 = cfg->h265;
+    app_config.mp4_mode = cfg->mode;
+    app_config.mp4_profile = cfg->profile;
+    app_config.mp4_bitrate = cfg->bitrate;
+}
+
+static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
+{
+    hal_vidconfig wire;
+
+    if (!cfg || cfg->width > UINT16_MAX || cfg->height > UINT16_MAX ||
+        cfg->fps > UINT8_MAX || cfg->gop > UINT8_MAX ||
+        cfg->bitrate > UINT16_MAX)
+        return -ERANGE;
+
+    memset(&wire, 0, sizeof(wire));
+    wire.width = (uint16_t)cfg->width;
+    wire.height = (uint16_t)cfg->height;
+    wire.codec = cfg->h265 ? HAL_VIDCODEC_H265 : HAL_VIDCODEC_H264;
+    wire.mode = cfg->mode;
+    wire.profile = cfg->profile;
+    wire.gop = (uint8_t)cfg->gop;
+    wire.framerate = (uint8_t)cfg->fps;
+    wire.bitrate = (uint16_t)cfg->bitrate;
+    return fh8626_video_contract_known(&wire) ? 0 : -ENOTSUP;
+}
+
+static int fh8626_api_video_restart(const struct fh8626_api_video_cfg *next,
+    const struct fh8626_api_video_cfg *old)
+{
+    int rc, rollback_rc;
+
+    fh8626_api_video_to_app(next);
+    rc = sdk_stop();
+    if (rc != EXIT_SUCCESS) {
+        fh8626_api_video_to_app(old);
+        return -EIO;
+    }
+
+    rc = sdk_start();
+    if (rc == EXIT_SUCCESS)
+        return 0;
+
+    fh8626_api_video_to_app(old);
+    rollback_rc = sdk_start();
+    if (rollback_rc != EXIT_SUCCESS)
+        return -EUCLEAN;
+    return -EIO;
+}
 
 enum StreamType {
     STREAM_H26X,
@@ -1151,20 +1234,18 @@ void respond_request(http_request_t *req) {
 
     if (EQUALS(req->uri, "/api/mp4")) {
         if (req->query && plat == HAL_PLATFORM_FH8626) {
-            char *remain;
-            int changed = 0;
+            struct fh8626_api_video_cfg old_cfg, next_cfg;
+            int structural_change = 0;
+            int bitrate_change = 0;
+            int enable_change = 0;
 
-            /*
-             * Exact live FH boundary: bitrate-only realtime RC is recovered
-             * for VBR/AVBR. Geometry/FPS/profile/mode/GOP still require the
-             * cold/restart transaction and are rejected before app_config is
-             * mutated.
-             */
+            fh8626_api_video_from_app(&old_cfg);
+            next_cfg = old_cfg;
+
             while (req->query) {
                 char *value = split(&req->query, "&");
-                char *key;
+                char *key, *remain;
                 long parsed;
-                int rc;
 
                 if (!value || !*value)
                     continue;
@@ -1172,30 +1253,112 @@ void respond_request(http_request_t *req) {
                 key = split(&value, "=");
                 if (!key || !*key || !value || !*value)
                     continue;
-                if (!EQUALS(key, "bitrate")) {
-                    send_http_error(req->clntFd, 501);
-                    return;
-                }
 
                 errno = 0;
+                if (EQUALS(key, "enable")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        next_cfg.enable = true;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_cfg.enable = false;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    enable_change = next_cfg.enable != old_cfg.enable;
+                    continue;
+                }
+                if (EQUALS(key, "h265")) {
+                    if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_cfg.h265 = false;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    structural_change |= next_cfg.h265 != old_cfg.h265;
+                    continue;
+                }
+                if (EQUALS(key, "mode")) {
+                    if (EQUALS_CASE(value, "CBR"))
+                        next_cfg.mode = HAL_VIDMODE_CBR;
+                    else if (EQUALS_CASE(value, "VBR"))
+                        next_cfg.mode = HAL_VIDMODE_VBR;
+                    else if (EQUALS_CASE(value, "AVBR"))
+                        next_cfg.mode = HAL_VIDMODE_AVBR;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    structural_change |= next_cfg.mode != old_cfg.mode;
+                    continue;
+                }
+                if (EQUALS(key, "profile")) {
+                    if (EQUALS_CASE(value, "BP") || EQUALS_CASE(value, "BASELINE"))
+                        next_cfg.profile = HAL_VIDPROFILE_BASELINE;
+                    else if (EQUALS_CASE(value, "MP") || EQUALS_CASE(value, "MAIN"))
+                        next_cfg.profile = HAL_VIDPROFILE_MAIN;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    structural_change |= next_cfg.profile != old_cfg.profile;
+                    continue;
+                }
+
                 parsed = strtol(value, &remain, 10);
-                if (errno || remain == value || *remain || parsed < 32 ||
-                    parsed > UINT16_MAX) {
+                if (errno || remain == value || *remain || parsed < 0) {
                     send_http_error(req->clntFd, 400);
                     return;
                 }
-                rc = fh8626_set_bitrate((uint32_t)parsed);
-                if (rc) {
-                    send_http_error(req->clntFd,
-                        rc == -EOPNOTSUPP ? 501 : 500);
+
+                if (EQUALS(key, "width")) {
+                    next_cfg.width = (unsigned int)parsed;
+                    structural_change |= next_cfg.width != old_cfg.width;
+                } else if (EQUALS(key, "height")) {
+                    next_cfg.height = (unsigned int)parsed;
+                    structural_change |= next_cfg.height != old_cfg.height;
+                } else if (EQUALS(key, "fps")) {
+                    next_cfg.fps = (unsigned int)parsed;
+                    structural_change |= next_cfg.fps != old_cfg.fps;
+                } else if (EQUALS(key, "gop")) {
+                    next_cfg.gop = (unsigned int)parsed;
+                    structural_change |= next_cfg.gop != old_cfg.gop;
+                } else if (EQUALS(key, "bitrate")) {
+                    next_cfg.bitrate = (unsigned int)parsed;
+                    bitrate_change = next_cfg.bitrate != old_cfg.bitrate;
+                } else {
+                    send_http_error(req->clntFd, 400);
                     return;
                 }
-                app_config.mp4_bitrate = (unsigned int)parsed;
-                changed = 1;
             }
-            if (!changed) {
-                send_http_error(req->clntFd, 400);
-                return;
+
+            {
+                int rc = fh8626_api_video_validate(&next_cfg);
+                if (rc) {
+                    send_http_error(req->clntFd, rc == -ENOTSUP ? 501 : 400);
+                    return;
+                }
+
+                if (!structural_change && bitrate_change &&
+                    (old_cfg.mode == HAL_VIDMODE_VBR ||
+                     old_cfg.mode == HAL_VIDMODE_AVBR)) {
+                    rc = fh8626_set_bitrate(next_cfg.bitrate);
+                    if (rc) {
+                        send_http_error(req->clntFd,
+                            rc == -EOPNOTSUPP ? 501 : 500);
+                        return;
+                    }
+                    app_config.mp4_bitrate = next_cfg.bitrate;
+                } else if (structural_change || bitrate_change) {
+                    rc = fh8626_api_video_restart(&next_cfg, &old_cfg);
+                    if (rc) {
+                        send_http_error(req->clntFd,
+                            rc == -EUCLEAN ? 503 : 500);
+                        return;
+                    }
+                }
+
+                if (enable_change)
+                    app_config.mp4_enable = next_cfg.enable;
             }
         } else if (req->query) {
             char *remain;
@@ -1222,6 +1385,10 @@ void respond_request(http_request_t *req) {
                     short result = strtol(value, &remain, 10);
                     if (remain != value)
                         app_config.mp4_fps = result;
+                } else if (EQUALS(key, "gop")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value)
+                        app_config.mp4_gop = result;
                 } else if (EQUALS(key, "bitrate")) {
                     short result = strtol(value, &remain, 10);
                     if (remain != value)
@@ -1256,33 +1423,37 @@ void respond_request(http_request_t *req) {
             if (app_config.mp4_enable) media_mp4_enable();
         }
 
-        char h265[6] = "false";
-        char mode[5] = "\0";
-        char profile[3] = "\0";
-        if (app_config.mp4_codecH265)
-            strcpy(h265, "true");
-        switch (app_config.mp4_mode) {
-            case HAL_VIDMODE_CBR: strcpy(mode, "CBR"); break;
-            case HAL_VIDMODE_VBR: strcpy(mode, "VBR"); break;
-            case HAL_VIDMODE_QP: strcpy(mode, "QP"); break;
-            case HAL_VIDMODE_ABR: strcpy(mode, "ABR"); break;
-            case HAL_VIDMODE_AVBR: strcpy(mode, "AVBR"); break;
+        {
+            char h265[6] = "false";
+            char mode[5] = "\0";
+            char profile[3] = "\0";
+            if (app_config.mp4_codecH265)
+                strcpy(h265, "true");
+            switch (app_config.mp4_mode) {
+                case HAL_VIDMODE_CBR: strcpy(mode, "CBR"); break;
+                case HAL_VIDMODE_VBR: strcpy(mode, "VBR"); break;
+                case HAL_VIDMODE_QP: strcpy(mode, "QP"); break;
+                case HAL_VIDMODE_ABR: strcpy(mode, "ABR"); break;
+                case HAL_VIDMODE_AVBR: strcpy(mode, "AVBR"); break;
+            }
+            switch (app_config.mp4_profile) {
+                case HAL_VIDPROFILE_BASELINE: strcpy(profile, "BP"); break;
+                case HAL_VIDPROFILE_MAIN: strcpy(profile, "MP"); break;
+                case HAL_VIDPROFILE_HIGH: strcpy(profile, "HP"); break;
+            }
+            respLen = sprintf(response,
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "{\"enable\":%s,\"width\":%d,\"height\":%d,\"fps\":%d,\"gop\":%d,"
+                "\"h265\":%s,\"mode\":\"%s\",\"profile\":\"%s\",\"bitrate\":%d}",
+                app_config.mp4_enable ? "true" : "false",
+                app_config.mp4_width, app_config.mp4_height,
+                app_config.mp4_fps, app_config.mp4_gop, h265, mode, profile,
+                app_config.mp4_bitrate);
+            send_and_close(req->clntFd, response, respLen);
         }
-        switch (app_config.mp4_profile) {
-            case HAL_VIDPROFILE_BASELINE: strcpy(profile, "BP"); break;
-            case HAL_VIDPROFILE_MAIN: strcpy(profile, "MP"); break;
-            case HAL_VIDPROFILE_HIGH: strcpy(profile, "HP"); break;
-        }
-        respLen = sprintf(response,
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: application/json;charset=UTF-8\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-            "{\"enable\":%s,\"width\":%d,\"height\":%d,\"fps\":%d,\"gop\":%d,"
-            "\"h265\":%s,\"mode\":\"%s\",\"profile\":\"%s\",\"bitrate\":%d}",
-            app_config.mp4_enable ? "true" : "false", app_config.mp4_width, app_config.mp4_height,
-            app_config.mp4_fps, app_config.mp4_gop, h265, mode, profile, app_config.mp4_bitrate);
-        send_and_close(req->clntFd, response, respLen);
         return;
     }
 
