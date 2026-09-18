@@ -47,9 +47,7 @@ void hal_identify(void) {
             if (machine)
                 fclose(machine);
         }
-        if (strstr(name, "FH8626V100") &&
-            !access("/dev/isp", F_OK) && !access("/dev/pae", F_OK) &&
-            !access("/dev/media_process", F_OK)) {
+        if (strstr(name, "FH8626V100")) {
             plat = HAL_PLATFORM_FH8626;
             strcpy(chip, "FH8626V100");
             strcpy(family, "fullhan-fh8626");

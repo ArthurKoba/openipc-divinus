@@ -113,6 +113,24 @@ static int call_ioctl(int fd, unsigned long request, void *arg)
     return rc == -1 && errno ? -errno : -EIO;
 }
 
+static int open_required_device(const char *path, int flags, int *out)
+{
+    int fd;
+
+    if (!path || !out)
+        return -EINVAL;
+    errno = 0;
+    fd = open(path, flags);
+    if (fd < 0) {
+        int rc = errno ? -errno : -EIO;
+        HAL_WARNING("fh8626", "required device %s open failed: %s\n",
+            path, errno ? strerror(errno) : "unknown error");
+        return rc;
+    }
+    *out = fd;
+    return 0;
+}
+
 static int alloc_vmm(struct fh8626_kernel *k, const char *name, uint32_t need,
                      struct fh8626_mem3 *mem)
 {
@@ -514,16 +532,34 @@ static int kernel_hal_init(void *opaque)
     void *mapped;
     int rc;
 
-    k->media_fd = open("/dev/media_process", O_RDWR | O_CLOEXEC);
-    k->isp_fd = open("/dev/isp", O_RDWR | O_CLOEXEC);
-    k->pae_fd = open("/dev/pae", O_RDWR | O_CLOEXEC);
-    k->vmm_fd = open("/dev/vmm_userdev", O_RDWR | O_CLOEXEC);
-    k->mem_fd = open("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC);
+    rc = open_required_device("/dev/media_process", O_RDWR | O_CLOEXEC,
+        &k->media_fd);
+    if (rc)
+        return rc;
+    rc = open_required_device("/dev/isp", O_RDWR | O_CLOEXEC, &k->isp_fd);
+    if (rc)
+        return rc;
+    rc = open_required_device("/dev/pae", O_RDWR | O_CLOEXEC, &k->pae_fd);
+    if (rc)
+        return rc;
+    rc = open_required_device("/dev/vmm_userdev", O_RDWR | O_CLOEXEC,
+        &k->vmm_fd);
+    if (rc)
+        return rc;
+    rc = open_required_device("/dev/mem", O_RDWR | O_SYNC | O_CLOEXEC,
+        &k->mem_fd);
+    if (rc)
+        return rc;
+
+    errno = 0;
     k->lock_fd = open("/var/run/fh8626-divinus.lock",
         O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (k->media_fd < 0 || k->isp_fd < 0 || k->pae_fd < 0 ||
-        k->vmm_fd < 0 || k->mem_fd < 0 || k->lock_fd < 0)
-        return -errno;
+    if (k->lock_fd < 0) {
+        rc = errno ? -errno : -EIO;
+        HAL_WARNING("fh8626", "lock file open failed: %s\n",
+            errno ? strerror(errno) : "unknown error");
+        return rc;
+    }
     if (flock(k->lock_fd, LOCK_EX | LOCK_NB) < 0)
         return errno == EWOULDBLOCK ? -EBUSY : -errno;
 
