@@ -252,6 +252,7 @@ static void capture_release(void)
 static void *capture_main(void *opaque)
 {
     unsigned int sequence = 0;
+    uint64_t last_frame_ms = monotonic_ms();
     (void)opaque;
 
     while (capture_running) {
@@ -272,9 +273,16 @@ static void *capture_main(void *opaque)
             break;
         }
         if (request.status || !request.data_length) {
+            uint64_t now_ms = monotonic_ms();
+            if (last_frame_ms && now_ms &&
+                now_ms - last_frame_ms > 10000u) {
+                capture_last_error = -ETIMEDOUT;
+                break;
+            }
             usleep(10000);
             continue;
         }
+        last_frame_ms = monotonic_ms();
         if (request.data_offset < capture_map_offset) {
             capture_last_error = -ERANGE;
             break;
@@ -400,4 +408,9 @@ void fh8626_audio_stop(void)
 int fh8626_audio_running(void)
 {
     return capture_running;
+}
+
+int fh8626_audio_last_error(void)
+{
+    return capture_last_error;
 }

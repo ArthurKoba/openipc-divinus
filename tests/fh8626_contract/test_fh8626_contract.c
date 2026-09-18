@@ -111,6 +111,7 @@ static void test_capabilities(void)
     assert(caps.mjpeg == FH8626_CAP_UNRESOLVED);
     assert(caps.audio_rtx_transport == FH8626_CAP_PROVEN);
     assert(caps.audio == FH8626_CAP_UNRESOLVED);
+    assert(caps.runtime_audio_reconfigure == FH8626_CAP_UNRESOLVED);
     assert(caps.runtime_video_reconfigure == FH8626_CAP_UNRESOLVED);
     assert(caps.temperature == FH8626_CAP_UNSUPPORTED);
     assert(!strcmp(fh8626_capability_state_name(FH8626_CAP_PROVEN), "proven"));

@@ -866,6 +866,13 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/audio")) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            /* Native RTX capture has a fixed evidence-backed hardware
+             * contract. Reconfigure it only across a tested process restart,
+             * not through the generic live audio mutation path. */
+            send_http_error(req->clntFd, 501);
+            return;
+        }
         if (req->query) {
             char *remain;
             while (req->query) {
@@ -1531,13 +1538,15 @@ void respond_request(http_request_t *req) {
             }
             snprintf(media_json, sizeof(media_json),
                 "{\"backend\":\"%s\",\"native_active\":%s,\"production_ready\":%s,"
-                "\"audio_capture\":%s,\"blockers\":%u,\"channels_total\":%u,\"channels_enabled\":%u,"
+                "\"audio_capture\":%s,\"audio_error\":%d,\"audio_capture_rate\":8000,"
+                "\"audio_gain_control\":false,\"blockers\":%u,\"channels_total\":%u,\"channels_enabled\":%u,"
                 "\"channels_mainloop\":%u,\"encoders\":{\"h264\":%u,\"h265\":%u,"
                 "\"jpeg\":%u,\"mjpeg\":%u}}",
                 provider.name ? provider.name : "unknown",
                 fh8626_native_active() ? "true" : "false",
                 provider.production ? "true" : "false",
-                fh8626_audio_running() ? "true" : "false", provider.blockers,
+                fh8626_audio_running() ? "true" : "false",
+                fh8626_audio_last_error(), provider.blockers,
                 (unsigned int)(unsigned char)chnCount, enabled_channels,
                 main_channels, h264_channels, h265_channels, jpeg_channels,
                 mjpeg_channels);
@@ -1549,6 +1558,7 @@ void respond_request(http_request_t *req) {
                 "\"rate_control_mapping\":\"%s\",\"vpss_1080p_scaling\":\"%s\","
                 "\"h265\":\"%s\",\"jpeg_snapshot\":\"%s\",\"mjpeg\":\"%s\","
                 "\"audio_rtx_transport\":\"%s\",\"audio\":\"%s\","
+                "\"runtime_audio_reconfigure\":\"%s\","
                 "\"runtime_video_reconfigure\":\"%s\",\"temperature\":\"%s\"}",
                 fh8626_capability_state_name(caps.h264_720p25),
                 fh8626_capability_state_name(caps.stream_lease_release),
@@ -1564,6 +1574,7 @@ void respond_request(http_request_t *req) {
                 fh8626_capability_state_name(caps.mjpeg),
                 fh8626_capability_state_name(caps.audio_rtx_transport),
                 fh8626_capability_state_name(caps.audio),
+                fh8626_capability_state_name(caps.runtime_audio_reconfigure),
                 fh8626_capability_state_name(caps.runtime_video_reconfigure),
                 fh8626_capability_state_name(caps.temperature));
         } else {

@@ -171,6 +171,7 @@ struct fh8626_capabilities fh8626_capabilities_current(void)
     caps.mjpeg = FH8626_CAP_UNRESOLVED;
     caps.audio_rtx_transport = FH8626_CAP_PROVEN;
     caps.audio = FH8626_CAP_UNRESOLVED;
+    caps.runtime_audio_reconfigure = FH8626_CAP_UNRESOLVED;
     caps.runtime_video_reconfigure = FH8626_CAP_UNRESOLVED;
     caps.temperature = FH8626_CAP_UNSUPPORTED;
     return caps;

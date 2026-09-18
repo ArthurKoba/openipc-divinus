@@ -64,6 +64,7 @@ struct fh8626_capabilities {
     fh8626_capability_state mjpeg;
     fh8626_capability_state audio_rtx_transport;
     fh8626_capability_state audio;
+    fh8626_capability_state runtime_audio_reconfigure;
     fh8626_capability_state runtime_video_reconfigure;
     fh8626_capability_state temperature;
 };
