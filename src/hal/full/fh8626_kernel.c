@@ -1566,10 +1566,10 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
          * QP selector, resize mode, speed, rotation. Geometry belongs to
          * MEM_INIT/VPSS and must not be duplicated here.
          */
-        snapshot_cfg[0] = quality;
-        snapshot_cfg[1] = 2u;
-        snapshot_cfg[2] = 4u;
-        snapshot_cfg[3] = 0u;
+        snapshot_cfg[0] = 4u; /* stock snapshot speed */
+        snapshot_cfg[1] = FH8626_JPEG_MODE_SNAPSHOT;
+        snapshot_cfg[2] = fh_jpeg_quality_hw(quality);
+        snapshot_cfg[3] = 0u; /* rotation */
         rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_SET_CHN_CFG, snapshot_cfg);
     } else {
         memset(&mjpeg_cfg, 0, sizeof(mjpeg_cfg));
@@ -1580,9 +1580,9 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
             rc = -ERANGE;
             goto fail_mem;
         }
-        mjpeg_cfg.src_fps_packed = fh8626_fps_packed(k->sensor_fps);
-        mjpeg_cfg.dst_fps_packed = fh8626_fps_packed(fps);
-        mjpeg_cfg.qp = quality;
+        mjpeg_cfg.frame_count = fps;
+        mjpeg_cfg.frame_time = 1u;
+        mjpeg_cfg.qp = fh_jpeg_quality_to_qp(quality);
         if (bitrate > UINT32_MAX / 1000u) {
             rc = -ERANGE;
             goto fail_mem;
@@ -1590,11 +1590,16 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
         mjpeg_cfg.target_rate = bitrate * 1000u;
         mjpeg_cfg.min_qp = 0u;
         mjpeg_cfg.max_qp = FH_JPEG_QP_MAX;
+        mjpeg_cfg.jpeg_mode_bit = 1u;
+        mjpeg_cfg.quality_hw = fh_jpeg_quality_hw(quality);
         mjpeg_cfg.rotation = 0u;
 
         switch (rc_mode) {
         case HAL_VIDMODE_QP:
             mjpeg_cfg.rc_selector = 0u;
+            mjpeg_cfg.target_rate = 0u;
+            mjpeg_cfg.min_qp = mjpeg_cfg.qp;
+            mjpeg_cfg.max_qp = mjpeg_cfg.qp;
             break;
         case HAL_VIDMODE_VBR:
         case HAL_VIDMODE_CBR:
@@ -1617,9 +1622,10 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
         rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_MJPEG_SET_CFG, &mjpeg_cfg);
         if (!rc && rc_mode == HAL_VIDMODE_CBR) {
             rc = fh_jpeg_drop_build_safe(&drop_cfg,
-                mjpeg_cfg.src_fps_packed, mjpeg_cfg.dst_fps_packed,
-                quality, mjpeg_cfg.dst_fps_packed,
-                120u, mjpeg_cfg.dst_fps_packed);
+                fh8626_fps_packed(k->sensor_fps),
+                fh8626_fps_packed(fps),
+                mjpeg_cfg.qp, fh8626_fps_packed(fps),
+                120u, fh8626_fps_packed(fps));
             if (!rc)
                 rc = call_ioctl(k->jpeg_fd, FH_JPEG_SET_DROP_CFG, &drop_cfg);
         }

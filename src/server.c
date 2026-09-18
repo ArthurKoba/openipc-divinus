@@ -21,6 +21,10 @@ struct fh8626_api_video_cfg {
     unsigned int mode;
     unsigned int profile;
     unsigned int bitrate;
+    unsigned int iqp;
+    unsigned int pqp;
+    unsigned int secondary_bitrate;
+    unsigned int extra_qp;
 };
 
 static void fh8626_api_video_from_app(struct fh8626_api_video_cfg *cfg)
@@ -34,6 +38,10 @@ static void fh8626_api_video_from_app(struct fh8626_api_video_cfg *cfg)
     cfg->mode = app_config.mp4_mode;
     cfg->profile = app_config.mp4_profile;
     cfg->bitrate = app_config.mp4_bitrate;
+    cfg->iqp = app_config.mp4_iqp;
+    cfg->pqp = app_config.mp4_pqp;
+    cfg->secondary_bitrate = app_config.mp4_secondary_bitrate;
+    cfg->extra_qp = app_config.mp4_extra_qp;
 }
 
 static void fh8626_api_video_to_app(const struct fh8626_api_video_cfg *cfg)
@@ -47,6 +55,10 @@ static void fh8626_api_video_to_app(const struct fh8626_api_video_cfg *cfg)
     app_config.mp4_mode = cfg->mode;
     app_config.mp4_profile = cfg->profile;
     app_config.mp4_bitrate = cfg->bitrate;
+    app_config.mp4_iqp = cfg->iqp;
+    app_config.mp4_pqp = cfg->pqp;
+    app_config.mp4_secondary_bitrate = cfg->secondary_bitrate;
+    app_config.mp4_extra_qp = cfg->extra_qp;
 }
 
 static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
@@ -55,7 +67,9 @@ static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
 
     if (!cfg || cfg->width > UINT16_MAX || cfg->height > UINT16_MAX ||
         cfg->fps > UINT8_MAX || cfg->gop > UINT8_MAX ||
-        cfg->bitrate > UINT16_MAX)
+        cfg->bitrate > UINT16_MAX ||
+        cfg->iqp > FH_PAE_MAX_QP || cfg->pqp > FH_PAE_MAX_QP ||
+        cfg->secondary_bitrate > UINT16_MAX || cfg->extra_qp > FH_PAE_MAX_QP)
         return -ERANGE;
 
     memset(&wire, 0, sizeof(wire));
@@ -67,6 +81,8 @@ static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
     wire.gop = (uint8_t)cfg->gop;
     wire.framerate = (uint8_t)cfg->fps;
     wire.bitrate = (uint16_t)cfg->bitrate;
+    wire.minQual = (uint8_t)cfg->iqp;
+    wire.maxQual = (uint8_t)cfg->pqp;
     return fh8626_video_contract_known(&wire) ? 0 : -ENOTSUP;
 }
 
@@ -1282,8 +1298,12 @@ void respond_request(http_request_t *req) {
                         next_cfg.mode = HAL_VIDMODE_CBR;
                     else if (EQUALS_CASE(value, "VBR"))
                         next_cfg.mode = HAL_VIDMODE_VBR;
+                    else if (EQUALS_CASE(value, "QP"))
+                        next_cfg.mode = HAL_VIDMODE_QP;
                     else if (EQUALS_CASE(value, "AVBR"))
                         next_cfg.mode = HAL_VIDMODE_AVBR;
+                    else if (EQUALS_CASE(value, "CVBR"))
+                        next_cfg.mode = HAL_VIDMODE_CVBR;
                     else {
                         send_http_error(req->clntFd, 501);
                         return;
@@ -1325,6 +1345,18 @@ void respond_request(http_request_t *req) {
                 } else if (EQUALS(key, "bitrate")) {
                     next_cfg.bitrate = (unsigned int)parsed;
                     bitrate_change = next_cfg.bitrate != old_cfg.bitrate;
+                } else if (EQUALS(key, "iqp")) {
+                    next_cfg.iqp = (unsigned int)parsed;
+                    structural_change |= next_cfg.iqp != old_cfg.iqp;
+                } else if (EQUALS(key, "pqp")) {
+                    next_cfg.pqp = (unsigned int)parsed;
+                    structural_change |= next_cfg.pqp != old_cfg.pqp;
+                } else if (EQUALS(key, "secondary_bitrate")) {
+                    next_cfg.secondary_bitrate = (unsigned int)parsed;
+                    structural_change |= next_cfg.secondary_bitrate != old_cfg.secondary_bitrate;
+                } else if (EQUALS(key, "extra_qp")) {
+                    next_cfg.extra_qp = (unsigned int)parsed;
+                    structural_change |= next_cfg.extra_qp != old_cfg.extra_qp;
                 } else {
                     send_http_error(req->clntFd, 400);
                     return;
