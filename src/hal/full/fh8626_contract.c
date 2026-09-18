@@ -130,9 +130,16 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
         return 0;
     if (config->codec != HAL_VIDCODEC_H264)
         return 0;
-    if (config->framerate != FH8626_NATIVE_FPS)
+    if (config->framerate != FH8626_NATIVE_FPS || config->gop != 25u)
         return 0;
     if (config->profile != HAL_VIDPROFILE_BASELINE)
+        return 0;
+    if (config->mode != HAL_VIDMODE_CBR &&
+        config->mode != HAL_VIDMODE_VBR &&
+        config->mode != HAL_VIDMODE_QP &&
+        config->mode != HAL_VIDMODE_AVBR)
+        return 0;
+    if (!config->bitrate)
         return 0;
     return 1;
 }

@@ -197,16 +197,24 @@ int fh8626_sdk_start(fh8626_video_sink sink)
 {
 #ifdef FH8626_NATIVE_KERNEL
     struct fh8626_native_config config;
+    hal_vidconfig requested;
 
     if (kernel_context)
         return -EBUSY;
-    if (app_config.mp4_codecH265 || app_config.mp4_width != 1280u ||
-        app_config.mp4_height != 720u || app_config.mp4_fps != 25u ||
-        app_config.mp4_gop != 25u || app_config.mp4_mode == HAL_VIDMODE_ABR)
+    memset(&requested, 0, sizeof(requested));
+    requested.width = app_config.mp4_width;
+    requested.height = app_config.mp4_height;
+    requested.codec = app_config.mp4_codecH265 ?
+        HAL_VIDCODEC_H265 : HAL_VIDCODEC_H264;
+    requested.mode = app_config.mp4_mode;
+    requested.profile = app_config.mp4_profile;
+    requested.gop = app_config.mp4_gop;
+    requested.framerate = app_config.mp4_fps;
+    requested.bitrate = app_config.mp4_bitrate;
+    if (!fh8626_video_contract_known(&requested))
         return -ENOTSUP;
     config = (struct fh8626_native_config){
         app_config.mp4_width, app_config.mp4_height, app_config.mp4_fps,
-        app_config.mp4_gop, app_config.mp4_profile,
         app_config.mp4_mode == HAL_VIDMODE_VBR ? 0u :
         app_config.mp4_mode == HAL_VIDMODE_AVBR ? 4u :
         app_config.mp4_mode == HAL_VIDMODE_QP ? 2u : 1u,

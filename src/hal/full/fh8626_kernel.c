@@ -801,8 +801,9 @@ static int kernel_video_create(void *opaque)
     if (call_ioctl(k->pae_fd, FH8626_PAE_ENC_MEM_INIT, &memory))
         return -EIO;
     /* FH_PAE_CFG field0c is the encoder's fixed input quantum, not GOP.
-     * The owner uses 50 and H.264 Baseline (profile id 66); GOP and RC mode
-     * are configured by the following controls. */
+     * The recovered fixed FH8626 contract uses H.264 Baseline (profile id 66).
+     * Divinus rejects non-baseline/non-25-GOP requests at the HAL boundary
+     * instead of carrying ignored profile/GOP fields into this backend. */
     config = (struct fh8626_pae_cfg){0, k->config.width, k->config.height,
                                      50, 66, 28,
                                      FH8626_OWNER_FPS_PACKED, 0, 0, 0, 0};
@@ -1405,7 +1406,7 @@ int fh8626_kernel_start(struct fh8626_kernel **out,
     }
     k->jpeg_lock_ready = 1;
     if (!k->config.width || !k->config.height || !k->config.fps ||
-        !k->config.gop || !k->config.bitrate_kbps) {
+        !k->config.bitrate_kbps) {
         pthread_mutex_destroy(&k->jpeg_lock);
         free(k);
         return -EINVAL;
