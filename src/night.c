@@ -15,19 +15,20 @@ bool night_manual_on(void) { return manual; }
 
 bool night_mode_on(void) { return grayscale && !ircut && irled; }
 
-void night_grayscale(bool enable) {
+int night_grayscale(bool enable) {
     if (plat == HAL_PLATFORM_FH8626) {
         int rc = fh8626_set_grayscale(enable);
         if (rc) {
             HAL_WARNING("night",
                 "FH8626 grayscale transaction failed with %#x; state unchanged\n",
                 rc);
-            return;
+            return EXIT_FAILURE;
         }
     } else {
         set_grayscale(enable);
     }
     grayscale = enable;
+    return EXIT_SUCCESS;
 }
 
 void night_ircut(bool enable) {
@@ -56,7 +57,11 @@ void night_manual(bool enable) { manual = enable; }
 
 void night_mode(bool enable) {
     HAL_INFO("night", "Changing mode to %s\n", enable ? "NIGHT" : "DAY");
-    night_grayscale(enable);
+    /* Keep optical/mechanical state coherent with ISP color mode.  On FH8626
+     * the grayscale update is transactional; do not move the IR-cut or LED if
+     * that transaction could not be committed. */
+    if (night_grayscale(enable) != EXIT_SUCCESS)
+        return;
     night_ircut(!enable);
     night_irled(enable);
 }
@@ -72,9 +77,9 @@ void *night_thread(void *arg) {
         int adc_fd = -1;
         int cnt = 0, tmp = 0, val;
 
-        if ((adc_fd = open(app_config.adc_device, O_RDONLY | O_NONBLOCK)) <= 0) {
+        if ((adc_fd = open(app_config.adc_device, O_RDONLY | O_NONBLOCK)) < 0) {
             HAL_DANGER("night", "Could not open the ADC virtual device!\n");
-            return NULL;
+            goto done;
         }
         while (keepRunning && nightOn) {
             if (read(adc_fd, &val, sizeof(val)) > 0) {
@@ -89,11 +94,11 @@ void *night_thread(void *arg) {
             }
             usleep(app_config.check_interval_s * 1000000 / 12);
         }
-        if (adc_fd) close(adc_fd);
+        close(adc_fd);
     } else if (app_config.ir_sensor_pin == 999) {
-        while (keepRunning) sleep(1);
+        while (keepRunning && nightOn) sleep(1);
     } else {
-        while (keepRunning) {
+        while (keepRunning && nightOn) {
             bool state = false;
             if (!gpio_read(app_config.ir_sensor_pin, &state))
                 if (!manual) night_mode(state);
@@ -102,6 +107,7 @@ void *night_thread(void *arg) {
         }
     }
 
+done:
     usleep(10000);
     gpio_deinit();
     HAL_INFO("night", "Night mode thread is closing...\n");
@@ -122,18 +128,20 @@ int night_enable(void) {
     size_t new_stacksize = 16 * 1024;
     if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
         HAL_DANGER("night", "Error:  Can't set stack size %zu\n", new_stacksize);
+    /* Publish the run flag before pthread_create so the new thread cannot
+     * observe a transient stopped state and exit its first loop immediately. */
+    nightOn = 1;
     ret = pthread_create(&nightPid, &thread_attr, night_thread, NULL);
     if (pthread_attr_setstacksize(&thread_attr, stacksize))
         HAL_DANGER("night", "Error:  Can't set stack size %zu\n", stacksize);
     pthread_attr_destroy(&thread_attr);
 
     if (ret) {
+        nightOn = 0;
         HAL_DANGER("night", "Starting the night mode thread failed: %s\n",
             strerror(ret));
         return EXIT_FAILURE;
     }
-
-    nightOn = 1;
 
     return EXIT_SUCCESS;
 }

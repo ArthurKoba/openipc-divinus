@@ -1899,10 +1899,19 @@ void respond_request(http_request_t *req) {
                     if (remain != value)
                         app_config.adc_threshold = result;
                 } else if (EQUALS(key, "grayscale")) {
+                    int rc;
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
-                        night_grayscale(1);
+                        rc = night_grayscale(1);
                     else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
-                        night_grayscale(0);
+                        rc = night_grayscale(0);
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    if (rc != EXIT_SUCCESS) {
+                        send_http_error(req->clntFd, 500);
+                        return;
+                    }
                 } else if (EQUALS(key, "ircut")) {
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
                         night_ircut(1);
