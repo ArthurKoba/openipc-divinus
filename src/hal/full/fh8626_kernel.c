@@ -267,6 +267,19 @@ static int kernel_h264_ioctl(void *opaque, unsigned long request, void *arg)
     return call_ioctl(k->pae_fd, request, arg);
 }
 
+static int kernel_force_i(struct fh8626_kernel *k)
+{
+    struct fh_h264_control control;
+
+    if (!k || k->pae_fd < 0)
+        return -ENODEV;
+    memset(&control, 0, sizeof(control));
+    control.ioctl = kernel_h264_ioctl;
+    control.opaque = k;
+    control.channel = FH8626_NATIVE_CHANNEL;
+    return fh_h264_force_i(&control);
+}
+
 static int kernel_ae_timing(void *opaque, uint32_t timing[4])
 {
     struct fh8626_kernel *k = opaque;
@@ -994,7 +1007,17 @@ static void *kernel_stream_thread(void *opaque)
             k->adapter.pts_us = (uint64_t)now.tv_sec * 1000000u +
                 (uint64_t)now.tv_nsec / 1000u;
 
-        rc = fh8626_native_adapter_pump(&k->adapter, k->sink);
+        {
+            unsigned int before = k->adapter.sequence;
+
+            rc = fh8626_native_adapter_pump(&k->adapter, k->sink);
+            if (k->adapter.sequence != before && k->config.gop &&
+                (k->adapter.sequence % k->config.gop) == 0u) {
+                int gop_rc = kernel_force_i(k);
+                if (gop_rc && !rc)
+                    rc = gop_rc;
+            }
+        }
         if (rc) {
             k->pump_errors++;
             if (!producer_probe_done && rc == -EIO) {
@@ -1083,6 +1106,12 @@ static int kernel_stream_start(void *opaque)
     if (rc)
         return rc;
     k->pae_started = 1;
+
+    /* Ensure every new stream generation begins at a random-access point.
+     * The producer is not bound yet, so this flag applies to the first AU. */
+    rc = kernel_force_i(k);
+    if (rc)
+        goto fail;
 
     rc = call_ioctl(k->media_fd, FH8626_MEDIA_BIND, bind);
     if (rc)
@@ -1895,15 +1924,9 @@ int fh8626_kernel_is_running(const struct fh8626_kernel *k)
 
 int fh8626_kernel_request_idr(struct fh8626_kernel *k)
 {
-    struct fh_h264_control control;
-
-    if (!k || k->pae_fd < 0 || !k->running)
+    if (!k || !k->running)
         return -ENODEV;
-    memset(&control, 0, sizeof(control));
-    control.ioctl = kernel_h264_ioctl;
-    control.opaque = k;
-    control.channel = FH8626_NATIVE_CHANNEL;
-    return fh_h264_force_i(&control);
+    return kernel_force_i(k);
 }
 
 int fh8626_kernel_set_bitrate(struct fh8626_kernel *k, uint32_t bitrate_kbps)
