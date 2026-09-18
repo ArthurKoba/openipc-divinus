@@ -9,7 +9,7 @@ static void test_logo_header_and_wire(void)
 {
     struct fh8626_graphv2_logo logo = {
         .enable = 1,
-        .graph_index = 5,
+        .graph_index = 3,
         .phys = 0x23456000u,
         .opacity = 200,
         .x = 16,
@@ -23,7 +23,7 @@ static void test_logo_header_and_wire(void)
 
     assert(fh8626_graphv2_build_logo(&logo, pub) == 0);
     assert(pub[0] == 1u);
-    assert(pub[1] == 5u);
+    assert(pub[1] == 3u);
     assert(pub[2] == 0x10u);
     assert(pub[3] == 0x23456000u);
     assert(pub[6] == 1u);
@@ -37,7 +37,7 @@ static void test_logo_header_and_wire(void)
 
     assert(fh8626_graphv2_public_to_wire(1u, pub, wire) == 0);
     assert(wire[0] == 1u);
-    assert(wire[1] == 5u);
+    assert(wire[1] == 3u);
     assert(wire[2] == 1u);
     assert(wire[3] == 0x10u);
     assert(wire[4] == 0x23456000u);
@@ -99,6 +99,13 @@ static void test_rejects_unproved_shapes(void)
 
     assert(fh8626_graphv2_build_logo(&logo, pub) == 0);
     assert(fh8626_graphv2_public_to_wire(3u, pub, wire) == -EINVAL);
+
+    logo.graph_index = FH8626_GRAPHV2_GLOBAL_SLOTS;
+    assert(fh8626_graphv2_build_logo(&logo, pub) == 0);
+    assert(fh8626_graphv2_public_to_wire(0u, pub, wire) == -EINVAL);
+    logo.graph_index = FH8626_GRAPHV2_GLOBAL_SLOTS - 1u;
+    assert(fh8626_graphv2_build_logo(&logo, pub) == 0);
+    assert(fh8626_graphv2_public_to_wire(0u, pub, wire) == 0);
 }
 
 int main(void)

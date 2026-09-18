@@ -84,8 +84,10 @@ int fh8626_graphv2_public_to_wire(uint32_t selector,
 {
     unsigned i;
 
-    if (!pub || !wire || selector > 2u ||
-        pub[1] >= FH8626_OSD_HW_SLOTS)
+    if (!pub || !wire || selector > 2u)
+        return -EINVAL;
+    if ((selector == 0u && pub[1] >= FH8626_GRAPHV2_GLOBAL_SLOTS) ||
+        (selector != 0u && pub[1] >= FH8626_GRAPHV2_CHANNEL_SLOTS))
         return -EINVAL;
 
     memset(wire, 0, FH8626_GRAPHV2_WIRE_WORDS * sizeof(*wire));
