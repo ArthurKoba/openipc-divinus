@@ -1455,11 +1455,12 @@ void respond_request(http_request_t *req) {
                 "Connection: close\r\n"
                 "\r\n"
                 "{\"enable\":%s,\"width\":%d,\"height\":%d,\"fps\":%d,\"gop\":%d,"
-                "\"h265\":%s,\"mode\":\"%s\",\"profile\":\"%s\",\"bitrate\":%d}",
+                "\"h265\":%s,\"mode\":\"%s\",\"profile\":\"%s\",\"bitrate\":%d,"
+                "\"iqp\":%d,\"pqp\":%d}",
                 app_config.mp4_enable ? "true" : "false",
                 app_config.mp4_width, app_config.mp4_height,
                 app_config.mp4_fps, app_config.mp4_gop, h265, mode, profile,
-                app_config.mp4_bitrate);
+                app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp);
             send_and_close(req->clntFd, response, respLen);
         }
         return;
