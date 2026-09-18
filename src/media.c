@@ -1,6 +1,6 @@
 #include "media.h"
 #include "hal/full/fh8626_hal.h"
-#include "source/fh86_audio.h"
+#include "hal/full/fh8626_audio.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -20,47 +20,6 @@ short pcmSrc[SHINE_MAX_SAMPLES];
  * waiting on the encode.  Newest frames are dropped when it is full. */
 static struct ringbuf audRing;
 static unsigned int audDrops;
-
-static int fh86_owner_command(const char *command) {
-    size_t len;
-    int fd = -1, rc;
-    unsigned attempt;
-
-    if (!command || !(len = strlen(command))) return -EINVAL;
-    /* The owner and Divinus are launched by the same init service.  On a cold
-     * start Divinus can reach media setup before the owner creates its FIFO;
-     * a one-shot open silently left the encoder at the low stock bootstrap
-     * rate until somebody changed it manually. */
-    for (attempt = 0; attempt < 20; ++attempt) {
-        fd = open("/tmp/fh8626_ctl", O_WRONLY | O_NONBLOCK | O_CLOEXEC);
-        if (fd >= 0) break;
-        if (errno != ENOENT && errno != ENXIO) return -errno;
-        usleep(100000);
-    }
-    if (fd < 0) return -errno;
-    rc = write(fd, command, len) == (ssize_t)len ? 0 : -EIO;
-    close(fd);
-    return rc;
-}
-
-static int fh86_owner_apply_video_config(void) {
-    char command[64];
-    uint64_t rate;
-    int rc;
-
-    /* HAL and PAE wire enums are different domains: CBR=1, AVBR=4.
-     * Do not alias AVBR to CBR or pass HAL values directly. */
-    if (app_config.mp4_mode != HAL_VIDMODE_AVBR &&
-        app_config.mp4_mode != HAL_VIDMODE_CBR)
-        return -EOPNOTSUPP;
-    rate = (uint64_t)app_config.mp4_bitrate * 1000u;
-    if (!rate || rate > UINT32_MAX) return -ERANGE;
-    snprintf(command, sizeof(command), "encoder config %s %u\n",
-        app_config.mp4_mode == HAL_VIDMODE_CBR ? "cbr" : "avbr", (unsigned)rate);
-    rc = fh86_owner_command(command);
-    /* FIFO delivery is not driver acceptance; owner logs the commit result. */
-    return rc;
-}
 
 int save_audio_stream(hal_audframe *frame) {
 #ifdef DEBUG_AUDIO
@@ -172,7 +131,7 @@ int save_video_stream(char index, hal_vidstream *stream) {
                 pthread_mutex_lock(&mp4Mtx);
                 for (unsigned int i = 0; i < stream->count; ++i) {
                     if (mp4_prepare_pack(&stream->pack[i], isH265,
-                            app_config.source_type == APP_SOURCE_FH86) != 1)
+                            plat == HAL_PLATFORM_FH8626) != 1)
                         continue;
                     hal_vidstream fragment = *stream;
                     fragment.pack = &stream->pack[i];
@@ -183,7 +142,7 @@ int save_video_stream(char index, hal_vidstream *stream) {
                 pthread_mutex_unlock(&mp4Mtx);
 
             }
-            if (app_config.mp4_enable || app_config.source_type == APP_SOURCE_FH86)
+            if (app_config.mp4_enable)
                 send_h26x_to_client(index, stream);
             if (app_config.rtsp_enable)
                 rtp_send_h26x(rtspHandle, stream, isH265);
@@ -316,11 +275,9 @@ void media_stop(void) {
 }
 
 void request_idr(void) {
-    if (app_config.source_type == APP_SOURCE_FH86 ||
-        plat == HAL_PLATFORM_FH8626) {
-        /* The external source owns PAE. Reapply its accepted RC block to
-         * restart the encoder with fresh SPS/PPS and an intra picture. */
-        (void)fh86_owner_command("encoder refresh\n");
+    if (plat == HAL_PLATFORM_FH8626) {
+        /* Native force-IDR is not yet evidence-backed. The encoder GOP bounds
+         * the wait; do not revive the retired owner-control FIFO here. */
         return;
     }
 
@@ -356,10 +313,6 @@ void request_idr(void) {
 }
 
 void set_grayscale(bool active) {
-    if (app_config.source_type == APP_SOURCE_FH86 &&
-        plat != HAL_PLATFORM_FH8626)
-        return;
-
     pthread_mutex_lock(&chnMtx);
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
@@ -500,17 +453,17 @@ int media_video_disable(char index, char jpeg) {
 void media_audio_disable(void) {
     if (!audioOn) return;
 
-    if (app_config.source_type == APP_SOURCE_FH86)
-        fh86_audio_stop();
+    if (plat == HAL_PLATFORM_FH8626)
+        fh8626_audio_stop();
     audioOn = 0;
 
     pthread_join(aencPid, NULL);
-    if (app_config.source_type != APP_SOURCE_FH86)
+    if (plat != HAL_PLATFORM_FH8626)
         pthread_join(audPid, NULL);
     ringbuf_destroy(&audRing);
     shine_close(mp3Enc);
 
-    if (app_config.source_type == APP_SOURCE_FH86)
+    if (plat == HAL_PLATFORM_FH8626)
         return;
 
     switch (plat) {
@@ -534,18 +487,20 @@ void media_audio_disable(void) {
 }
 
 int media_audio_enable(void) {
-    if (app_config.source_type == APP_SOURCE_FH86 &&
-        plat != HAL_PLATFORM_FH8626)
-        return EXIT_FAILURE;
     int ret = EXIT_SUCCESS;
+
+    if (plat == HAL_PLATFORM_FH8626 && app_config.audio_srate != 8000) {
+        HAL_DANGER("media",
+            "FH8626 RTX capture is hardware-validated at 8000 Hz only.\n");
+        return EXIT_FAILURE;
+    }
 
     if (audioOn) return ret;
 
     if (ringbuf_init(&audRing, AUD_RING_CAP))
         HAL_ERROR("media", "Audio queue initialization failed!\n");
 
-    if (app_config.source_type != APP_SOURCE_FH86 &&
-        plat != HAL_PLATFORM_FH8626) switch (plat) {
+    if (plat != HAL_PLATFORM_FH8626) switch (plat) {
 #if defined(__ARM_PCS_VFP)
         case HAL_PLATFORM_I6:  ret = i6_audio_init(app_config.audio_srate, app_config.audio_gain); break;
         case HAL_PLATFORM_I6C: ret = i6c_audio_init(app_config.audio_srate, app_config.audio_gain); break;
@@ -585,8 +540,7 @@ int media_audio_enable(void) {
 
     audioOn = 1;
 
-    if (app_config.source_type != APP_SOURCE_FH86 &&
-        plat != HAL_PLATFORM_FH8626) {
+    if (plat != HAL_PLATFORM_FH8626) {
         pthread_attr_t thread_attr;
         pthread_attr_init(&thread_attr);
         size_t stacksize;
@@ -618,18 +572,14 @@ int media_audio_enable(void) {
         pthread_attr_destroy(&thread_attr);
     }
 
-    if (app_config.source_type == APP_SOURCE_FH86 &&
-        fh86_audio_start(save_audio_stream))
-        HAL_ERROR("media", "FH86 audio capture startup failed!\n");
+    if (plat == HAL_PLATFORM_FH8626 &&
+        fh8626_audio_start(save_audio_stream))
+        HAL_ERROR("media", "FH8626 RTX audio capture startup failed!\n");
 
     return ret;
 }
 
 int media_mjpeg_disable(void) {
-    if (app_config.source_type == APP_SOURCE_FH86 &&
-        plat != HAL_PLATFORM_FH8626)
-        return EXIT_SUCCESS;
-
     if (plat == HAL_PLATFORM_FH8626) {
         fh8626_jpeg_deinit_mode(2u);
         memset(&fh8626_state[1], 0, sizeof(fh8626_state[1]));
@@ -655,10 +605,6 @@ int media_mjpeg_disable(void) {
 }
 
 int media_mjpeg_enable(void) {
-    if (app_config.source_type == APP_SOURCE_FH86 &&
-        plat != HAL_PLATFORM_FH8626)
-        return EXIT_FAILURE;
-
     if (plat == HAL_PLATFORM_FH8626) {
         int native_ret = fh8626_jpeg_init(2u, app_config.mjpeg_width,
             app_config.mjpeg_height, app_config.mjpeg_qfactor,
@@ -723,8 +669,7 @@ int media_mjpeg_enable(void) {
 }
 
 int media_mp4_disable(void) {
-    if (app_config.source_type == APP_SOURCE_FH86 ||
-        plat == HAL_PLATFORM_FH8626)
+    if (plat == HAL_PLATFORM_FH8626)
         return EXIT_SUCCESS;
 
     int ret;
@@ -748,22 +693,6 @@ int media_mp4_disable(void) {
 
 int media_mp4_enable(void) {
     int ret;
-
-    if (app_config.source_type == APP_SOURCE_FH86) {
-        if (app_config.mp4_codecH265)
-            return EXIT_FAILURE;
-
-        if (fh86_owner_apply_video_config()) {
-            HAL_WARNING("media", "FH86 RC configuration delivery failed\n");
-            return EXIT_FAILURE;
-        }
-
-        mp4_set_config(app_config.mp4_width, app_config.mp4_height,
-            app_config.mp4_fps,
-            app_config.audio_enable ? HAL_AUDCODEC_MP3 : HAL_AUDCODEC_UNSPEC,
-            app_config.audio_bitrate, 1, app_config.audio_srate);
-        return EXIT_SUCCESS;
-    }
 
     int index = take_next_free_channel(true);
 

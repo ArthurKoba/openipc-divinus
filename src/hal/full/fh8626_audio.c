@@ -1,4 +1,4 @@
-#include "fh86_audio.h"
+#include "fh8626_audio.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -11,13 +11,16 @@
 #include <time.h>
 #include <unistd.h>
 
-#define FH86_PCM_FRAME_BYTES 320
+/* Hardware-proven RTX capture contract: mono, 8 kHz, signed 16-bit PCM,
+ * 320-byte frames. The helper owns /dev/rtxbus; Divinus owns buffering and
+ * encoding after this boundary. */
+#define FH8626_PCM_FRAME_BYTES 320
 
 static pthread_t capture_thread;
 static volatile int capture_running;
 static int capture_fd = -1;
 static pid_t capture_pid = -1;
-static fh86_audio_frame_cb capture_callback;
+static fh8626_audio_frame_cb capture_callback;
 
 static uint64_t monotonic_ms(void) {
     struct timespec now;
@@ -26,7 +29,7 @@ static uint64_t monotonic_ms(void) {
 }
 
 static void *capture_main(void *opaque) {
-    unsigned char pcm[FH86_PCM_FRAME_BYTES];
+    unsigned char pcm[FH8626_PCM_FRAME_BYTES];
     unsigned int sequence = 0;
     size_t used = 0;
     (void)opaque;
@@ -53,7 +56,7 @@ static void *capture_main(void *opaque) {
     return NULL;
 }
 
-int fh86_audio_start(fh86_audio_frame_cb callback) {
+int fh8626_audio_start(fh8626_audio_frame_cb callback) {
     int pipefd[2];
     int status;
     if (capture_running) return EXIT_SUCCESS;
@@ -79,7 +82,7 @@ int fh86_audio_start(fh86_audio_frame_cb callback) {
     return EXIT_SUCCESS;
 }
 
-void fh86_audio_stop(void) {
+void fh8626_audio_stop(void) {
     pid_t pid = capture_pid;
     if (pid > 0) kill(pid, SIGTERM);
     capture_running = 0;
@@ -92,4 +95,4 @@ void fh86_audio_stop(void) {
     capture_callback = NULL;
 }
 
-int fh86_audio_running(void) { return capture_running; }
+int fh8626_audio_running(void) { return capture_running; }

@@ -45,15 +45,16 @@ In spite of these design choices, Divinus boasts numerous features that cater to
 | infinity6e[^15]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | infinity6c[^16]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | mercury6[^17]           | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
-| FH8626V100 (external H.264 owner) | owner-provided | ✗ | ✔️ | ✔️ | ✗ |
+| FH8626V100              | ↻            | ↻             | ↻           | ↻           | ✗                  |
 | sun8iw21p1[^18]         | ↻            | ↻            | ↻           | ↻           | ↻                 |
 
 _✔️ - supported, ↻ - in development, ✗ - unsupported, ⁿ/ₐ - not supported by hardware_
 
-FH8626V100 uses the generic `source: fh86` frontend. A separate media owner
-provides encoded H.264 frames over the configured Unix socket; Divinus owns the
-frontend services (RTSP, fMP4, WebUI and API), not the camera board's ISP/VENC.
-Board-specific controls and policies belong in the downstream device profile.
+FH8626V100 uses the native Fullhan HAL in `src/hal/full/`. Divinus owns the
+sensor/ISP/media/VENC path directly; the former external FH86 H.264 owner/socket
+frontend is retired. RTX audio capture remains a separate Fullhan hardware
+backend because that is the board's hardware-proven audio ownership path.
+Board-specific lens, illumination, reset and PTZ policy stays outside Divinus.
 
 _* At the moment, text, RGB or bitfield bitmaps and PNG overlays are handled, more matricial formats and covers are to follow_
 

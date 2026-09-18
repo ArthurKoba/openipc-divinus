@@ -6,7 +6,6 @@
 #include "night.h"
 #include "rtsp/rtsp_server.h"
 #include "server.h"
-#include "source/fh86_divinus.h"
 #include "watchdog.h"
 
 #include <getopt.h>
@@ -36,8 +35,6 @@ void handle_exit(int signo) {
 }
 
 int main(int argc, char *argv[]) {
-    enum AppSourceType source_type;
-
     {
         struct sigaction sa;
         memset(&sa, 0, sizeof(sa));
@@ -58,23 +55,14 @@ int main(int argc, char *argv[]) {
         sigaction(SIGPIPE, &sa, NULL);
     }
 
-    if (app_config_probe_source(&source_type) != CONFIG_OK)
-        HAL_ERROR("app_config", "Can't determine source type from 'divinus.yaml'\n");
+    hal_identify();
 
-    if (source_type == APP_SOURCE_SDK) {
-        hal_identify();
+    if (!*family)
+        HAL_ERROR("hal", "Unsupported chip family! Quitting...\n");
 
-        if (!*family)
-            HAL_ERROR("hal", "Unsupported chip family! Quitting...\n");
-
-        fprintf(stderr, "\033[0m\033[7m Divinus (rev %s) for %s \033[0m\n",
-            GIT_REV, family);
-        fprintf(stderr, "Chip ID: %s\n", chip);
-    } else {
-        fprintf(stderr,
-            "\033[0m\033[7m Divinus (rev %s) with external FH86 source \033[0m\n",
-            GIT_REV);
-    }
+    fprintf(stderr, "\033[0m\033[7m Divinus (rev %s) for %s \033[0m\n",
+        GIT_REV, family);
+    fprintf(stderr, "Chip ID: %s\n", chip);
 
     if (app_config_parse() != CONFIG_OK)
         HAL_ERROR("hal", "Can't load app config 'divinus.yaml'\n");
@@ -104,10 +92,7 @@ int main(int argc, char *argv[]) {
     if (app_config.stream_enable)
         media_start();
 
-    if (app_config.source_type == APP_SOURCE_FH86) {
-        if (fh86_divinus_start())
-            HAL_ERROR("fh86_source", "Failed to start external source!\n");
-    } else if (sdk_start())
+    if (sdk_start())
         HAL_ERROR("hal", "Failed to start SDK!\n");
 
     if (app_config.night_mode_enable)
@@ -140,10 +125,7 @@ int main(int argc, char *argv[]) {
     if (app_config.night_mode_enable)
         night_disable();
 
-    if (app_config.source_type == APP_SOURCE_FH86)
-        fh86_divinus_stop();
-    else
-        sdk_stop();
+    sdk_stop();
 
     if (app_config.stream_enable)
         media_stop();
