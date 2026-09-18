@@ -384,6 +384,10 @@ int fh8626_sdk_stop(void)
 #ifdef FH8626_NATIVE_KERNEL
     if (kernel_context) {
         int native_ret = fh8626_kernel_stop(kernel_context);
+        /* -EBUSY means the owner context was deliberately retained rather than
+         * freeing resources under an outstanding stream lease. */
+        if (native_ret == -EBUSY)
+            return native_ret;
         kernel_context = NULL;
         memset(fh8626_state, 0, sizeof(fh8626_state));
         return native_ret;

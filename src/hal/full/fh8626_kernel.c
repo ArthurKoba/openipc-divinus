@@ -969,12 +969,10 @@ static int kernel_stream_start(void *opaque)
     return 0;
 }
 
-static int kernel_stage_stop(void *opaque)
+static void kernel_quiesce_threads(struct fh8626_kernel *k)
 {
-    struct fh8626_kernel *k = opaque;
-    uint32_t zero = 0;
-    int first_error = 0;
-    int rc;
+    if (!k)
+        return;
 
     k->running = 0;
     if (k->control_thread_started) {
@@ -985,6 +983,16 @@ static int kernel_stage_stop(void *opaque)
         pthread_join(k->thread, NULL);
         k->thread_started = 0;
     }
+}
+
+static int kernel_stage_stop(void *opaque)
+{
+    struct fh8626_kernel *k = opaque;
+    uint32_t zero = 0;
+    int first_error = 0;
+    int rc;
+
+    kernel_quiesce_threads(k);
     if (k->pae_fd >= 0) {
         rc = call_ioctl(k->pae_fd, FH_PAE_STOP_RECV, &zero);
         if (rc && !first_error)
@@ -1429,10 +1437,16 @@ int fh8626_kernel_stop(struct fh8626_kernel *k)
         if (rc && !first_error)
             first_error = rc;
     }
+    /* Stop/join workers before asking the lifecycle machine to tear down.
+     * This gives an in-flight adapter pump a chance to release its descriptor
+     * lease before the balanced-state gate is evaluated. */
+    kernel_quiesce_threads(k);
     if (k->runtime.life.state != FH8626_LIFE_COLD)
         rc = fh8626_native_runtime_stop(&k->runtime);
     else
         rc = kernel_stage_stop(k);
+    if (rc == -EBUSY)
+        return rc;
     if (rc && !first_error)
         first_error = rc;
 

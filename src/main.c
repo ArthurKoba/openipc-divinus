@@ -125,7 +125,11 @@ int main(int argc, char *argv[]) {
     if (app_config.night_mode_enable)
         night_disable();
 
-    sdk_stop();
+    int sdk_stop_status = sdk_stop();
+    if (sdk_stop_status)
+        HAL_WARNING("hal",
+            "SDK shutdown returned %#x; automatic restart will be suppressed.\n",
+            sdk_stop_status);
 
     if (app_config.stream_enable)
         media_stop();
@@ -145,11 +149,13 @@ int main(int argc, char *argv[]) {
     if (!graceful)
         app_config_restore();
 
-    if (graceful) {
+    if (graceful && !sdk_stop_status) {
         fprintf(stderr, "Restarting...\n");
         execvp(argv[0], argv);
     }
+    if (graceful && sdk_stop_status)
+        fprintf(stderr, "Restart suppressed because media ownership did not stop cleanly.\n");
 
     fprintf(stderr, "Main thread is shutting down...\n");
-    return EXIT_SUCCESS;
+    return sdk_stop_status ? EXIT_FAILURE : EXIT_SUCCESS;
 }
