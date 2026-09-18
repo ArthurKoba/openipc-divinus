@@ -498,10 +498,17 @@ void media_audio_disable(void) {
 int media_audio_enable(void) {
     int ret = EXIT_SUCCESS;
 
-    if (plat == HAL_PLATFORM_FH8626 && app_config.audio_srate != 8000) {
-        HAL_DANGER("media",
-            "FH8626 RTX capture is hardware-validated at 8000 Hz only.\n");
-        return EXIT_FAILURE;
+    if (plat == HAL_PLATFORM_FH8626) {
+        if (app_config.audio_srate != 8000) {
+            HAL_DANGER("media",
+                "FH8626 RTX capture is hardware-validated at 8000 Hz only.\n");
+            return EXIT_FAILURE;
+        }
+        if (app_config.audio_gain != 0) {
+            HAL_DANGER("media",
+                "FH8626 audio gain dB mapping is not proved; use gain=0 (stock RTX volume).\n");
+            return EXIT_FAILURE;
+        }
     }
 
     if (audioOn) return ret;

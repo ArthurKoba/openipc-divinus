@@ -966,13 +966,94 @@ void respond_request(http_request_t *req) {
 
     if (EQUALS(req->uri, "/api/audio")) {
         if (req->query && plat == HAL_PLATFORM_FH8626) {
-            /* Native RTX capture has a fixed evidence-backed hardware
-             * contract. Reconfigure it only across a tested process restart,
-             * not through the generic live audio mutation path. */
-            send_http_error(req->clntFd, 501);
-            return;
-        }
-        if (req->query) {
+            bool old_enable = app_config.audio_enable;
+            unsigned int old_bitrate = app_config.audio_bitrate;
+            int old_gain = app_config.audio_gain;
+            unsigned int old_srate = app_config.audio_srate;
+            bool next_enable = old_enable;
+            unsigned int next_bitrate = old_bitrate;
+            int next_gain = old_gain;
+            unsigned int next_srate = old_srate;
+            int rc;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key, *remain;
+                long parsed;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "enable")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        next_enable = true;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_enable = false;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    continue;
+                }
+
+                errno = 0;
+                parsed = strtol(value, &remain, 10);
+                if (errno || remain == value || *remain) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                if (EQUALS(key, "bitrate")) {
+                    if (parsed < 32 || parsed > 320) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_bitrate = (unsigned int)parsed;
+                } else if (EQUALS(key, "gain")) {
+                    if (parsed != 0) {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    next_gain = 0;
+                } else if (EQUALS(key, "srate")) {
+                    if (parsed != 8000) {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    next_srate = 8000u;
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            if (audioOn)
+                media_audio_disable();
+
+            app_config.audio_enable = next_enable;
+            app_config.audio_bitrate = next_bitrate;
+            app_config.audio_gain = next_gain;
+            app_config.audio_srate = next_srate;
+
+            rc = next_enable ? media_audio_enable() : EXIT_SUCCESS;
+            if (rc != EXIT_SUCCESS) {
+                if (audioOn)
+                    media_audio_disable();
+                app_config.audio_enable = old_enable;
+                app_config.audio_bitrate = old_bitrate;
+                app_config.audio_gain = old_gain;
+                app_config.audio_srate = old_srate;
+                if (old_enable && media_audio_enable() != EXIT_SUCCESS) {
+                    send_http_error(req->clntFd, 503);
+                    return;
+                }
+                send_http_error(req->clntFd, 500);
+                return;
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
