@@ -968,12 +968,19 @@ static int kernel_video_create(void *opaque)
             goto fail;
         }
         rc_config.bitrate_or_rate = k->config.bitrate_kbps * 1000u;
-        rc_config.i_min_qp = 30; rc_config.i_max_qp = 50;
-        rc_config.p_min_qp = 30; rc_config.p_max_qp = 50;
+        if (k->config.rc_mode == FH_PAE_RC_CBR) {
+            /* Exact Apollo public CBR translator defaults. */
+            rc_config.i_min_qp = 10; rc_config.i_max_qp = 50;
+            rc_config.p_min_qp = 10; rc_config.p_max_qp = 50;
+        } else {
+            rc_config.i_min_qp = 30; rc_config.i_max_qp = 50;
+            rc_config.p_min_qp = 30; rc_config.p_max_qp = 50;
+        }
         rc_config.i_proportion = 5; rc_config.p_proportion = 1;
         rc_config.still_rate_percent = 30; rc_config.max_rate_percent = 120;
         rc_config.ip_qp_delta = 3;
-        rc_config.max_still_qp = 38;
+        rc_config.max_still_qp =
+            k->config.rc_mode == FH_PAE_RC_CVBR ? 34u : 38u;
         if (k->config.rc_mode == FH_PAE_RC_CVBR) {
             if (k->config.secondary_bitrate_kbps > UINT32_MAX / 1000u) {
                 rc = -ERANGE;
