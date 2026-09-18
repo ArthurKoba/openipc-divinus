@@ -66,6 +66,9 @@ struct fh8626_capabilities {
     fh8626_capability_state audio;
     fh8626_capability_state runtime_audio_reconfigure;
     fh8626_capability_state runtime_video_reconfigure;
+    fh8626_capability_state osd_graphv2;
+    fh8626_capability_state grayscale_shared_context;
+    fh8626_capability_state night_board_wiring;
     fh8626_capability_state temperature;
 };
 

@@ -2018,7 +2018,10 @@ void respond_request(http_request_t *req) {
                 "\"h265\":\"%s\",\"jpeg_snapshot\":\"%s\",\"mjpeg\":\"%s\","
                 "\"audio_rtx_transport\":\"%s\",\"audio\":\"%s\","
                 "\"runtime_audio_reconfigure\":\"%s\","
-                "\"runtime_video_reconfigure\":\"%s\",\"temperature\":\"%s\"}",
+                "\"runtime_video_reconfigure\":\"%s\","
+                "\"osd_graphv2\":\"%s\","
+                "\"grayscale_shared_context\":\"%s\","
+                "\"night_board_wiring\":\"%s\",\"temperature\":\"%s\"}",
                 fh8626_capability_state_name(caps.h264_720p25),
                 fh8626_capability_state_name(caps.stream_lease_release),
                 fh8626_capability_state_name(caps.sensor_gc1054_init_order),
@@ -2035,6 +2038,9 @@ void respond_request(http_request_t *req) {
                 fh8626_capability_state_name(caps.audio),
                 fh8626_capability_state_name(caps.runtime_audio_reconfigure),
                 fh8626_capability_state_name(caps.runtime_video_reconfigure),
+                fh8626_capability_state_name(caps.osd_graphv2),
+                fh8626_capability_state_name(caps.grayscale_shared_context),
+                fh8626_capability_state_name(caps.night_board_wiring),
                 fh8626_capability_state_name(caps.temperature));
         } else {
             snprintf(media_json, sizeof(media_json),

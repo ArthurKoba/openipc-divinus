@@ -176,19 +176,22 @@ struct fh8626_capabilities fh8626_capabilities_current(void)
     caps.h264_720p25 = FH8626_CAP_PROVEN;
     caps.stream_lease_release = FH8626_CAP_PROVEN;
     caps.sensor_gc1054_init_order = FH8626_CAP_PROVEN;
-    caps.sensor_open_backend = FH8626_CAP_UNRESOLVED;
+    caps.sensor_open_backend = FH8626_CAP_PROVEN;
     caps.isp_direct_kernel_bringup = FH8626_CAP_PROVEN;
     caps.same_boot_full_teardown = FH8626_CAP_PROVEN;
     caps.idr_request = FH8626_CAP_PROVEN;
     caps.rate_control_mapping = FH8626_CAP_PROVEN;
     caps.vpss_1080p_scaling = FH8626_CAP_PROVEN;
     caps.h265 = FH8626_CAP_UNSUPPORTED;
-    caps.jpeg_snapshot = FH8626_CAP_UNRESOLVED;
-    caps.mjpeg = FH8626_CAP_UNRESOLVED;
+    caps.jpeg_snapshot = FH8626_CAP_PROVEN;
+    caps.mjpeg = FH8626_CAP_PROVEN;
     caps.audio_rtx_transport = FH8626_CAP_PROVEN;
     caps.audio = FH8626_CAP_PROVEN;
     caps.runtime_audio_reconfigure = FH8626_CAP_PROVEN;
-    caps.runtime_video_reconfigure = FH8626_CAP_UNRESOLVED;
+    caps.runtime_video_reconfigure = FH8626_CAP_PROVEN;
+    caps.osd_graphv2 = FH8626_CAP_PROVEN;
+    caps.grayscale_shared_context = FH8626_CAP_PROVEN;
+    caps.night_board_wiring = FH8626_CAP_PROVEN;
     caps.temperature = FH8626_CAP_UNSUPPORTED;
     return caps;
 }

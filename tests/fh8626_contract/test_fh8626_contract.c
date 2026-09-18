@@ -70,6 +70,7 @@ static void test_stream_descriptor(void)
 static void test_video_contract(void)
 {
     hal_vidconfig cfg;
+
     memset(&cfg, 0, sizeof(cfg));
     cfg.width = FH8626_NATIVE_WIDTH;
     cfg.height = FH8626_NATIVE_HEIGHT;
@@ -80,20 +81,41 @@ static void test_video_contract(void)
     cfg.mode = HAL_VIDMODE_CBR;
     cfg.bitrate = 2048;
     assert(fh8626_video_contract_known(&cfg));
+
     cfg.profile = HAL_VIDPROFILE_MAIN;
-    assert(!fh8626_video_contract_known(&cfg));
-    cfg.profile = HAL_VIDPROFILE_BASELINE;
+    assert(fh8626_video_contract_known(&cfg));
+
     cfg.gop = 50;
-    assert(!fh8626_video_contract_known(&cfg));
-    cfg.gop = 25;
+    assert(fh8626_video_contract_known(&cfg));
+
     cfg.mode = HAL_VIDMODE_QP;
+    cfg.minQual = 22;
+    cfg.maxQual = 30;
+    assert(fh8626_video_contract_known(&cfg));
+    cfg.maxQual = 52;
     assert(!fh8626_video_contract_known(&cfg));
+    cfg.maxQual = 30;
+
     cfg.mode = HAL_VIDMODE_ABR;
     assert(!fh8626_video_contract_known(&cfg));
-    cfg.mode = HAL_VIDMODE_CBR;
+
+    cfg.mode = HAL_VIDMODE_CVBR;
+    assert(fh8626_video_contract_known(&cfg));
+
     cfg.width = 1920;
+    cfg.height = 1080;
+    assert(fh8626_video_contract_known(&cfg));
+    cfg.width = 1919;
     assert(!fh8626_video_contract_known(&cfg));
+
     cfg.width = FH8626_NATIVE_WIDTH;
+    cfg.height = FH8626_NATIVE_HEIGHT;
+    cfg.framerate = 30;
+    assert(fh8626_video_contract_known(&cfg));
+    cfg.framerate = 31;
+    assert(!fh8626_video_contract_known(&cfg));
+
+    cfg.framerate = FH8626_NATIVE_FPS;
     cfg.codec = HAL_VIDCODEC_H265;
     assert(!fh8626_video_contract_known(&cfg));
 }
@@ -108,20 +130,26 @@ static void test_timestamp_conversion(void)
 static void test_capabilities(void)
 {
     struct fh8626_capabilities caps = fh8626_capabilities_current();
+
     assert(caps.h264_720p25 == FH8626_CAP_PROVEN);
     assert(caps.stream_lease_release == FH8626_CAP_PROVEN);
-    assert(caps.sensor_open_backend == FH8626_CAP_UNRESOLVED);
-    assert(caps.same_boot_full_teardown == FH8626_CAP_UNRESOLVED);
+    assert(caps.sensor_gc1054_init_order == FH8626_CAP_PROVEN);
+    assert(caps.sensor_open_backend == FH8626_CAP_PROVEN);
+    assert(caps.isp_direct_kernel_bringup == FH8626_CAP_PROVEN);
+    assert(caps.same_boot_full_teardown == FH8626_CAP_PROVEN);
     assert(caps.idr_request == FH8626_CAP_PROVEN);
     assert(caps.rate_control_mapping == FH8626_CAP_PROVEN);
-    assert(caps.vpss_1080p_scaling == FH8626_CAP_UNRESOLVED);
+    assert(caps.vpss_1080p_scaling == FH8626_CAP_PROVEN);
     assert(caps.h265 == FH8626_CAP_UNSUPPORTED);
-    assert(caps.jpeg_snapshot == FH8626_CAP_UNRESOLVED);
-    assert(caps.mjpeg == FH8626_CAP_UNRESOLVED);
+    assert(caps.jpeg_snapshot == FH8626_CAP_PROVEN);
+    assert(caps.mjpeg == FH8626_CAP_PROVEN);
     assert(caps.audio_rtx_transport == FH8626_CAP_PROVEN);
-    assert(caps.audio == FH8626_CAP_UNRESOLVED);
-    assert(caps.runtime_audio_reconfigure == FH8626_CAP_UNRESOLVED);
-    assert(caps.runtime_video_reconfigure == FH8626_CAP_UNRESOLVED);
+    assert(caps.audio == FH8626_CAP_PROVEN);
+    assert(caps.runtime_audio_reconfigure == FH8626_CAP_PROVEN);
+    assert(caps.runtime_video_reconfigure == FH8626_CAP_PROVEN);
+    assert(caps.osd_graphv2 == FH8626_CAP_PROVEN);
+    assert(caps.grayscale_shared_context == FH8626_CAP_PROVEN);
+    assert(caps.night_board_wiring == FH8626_CAP_PROVEN);
     assert(caps.temperature == FH8626_CAP_UNSUPPORTED);
     assert(!strcmp(fh8626_capability_state_name(FH8626_CAP_PROVEN), "proven"));
     assert(!strcmp(fh8626_capability_state_name(FH8626_CAP_UNRESOLVED), "unresolved"));
