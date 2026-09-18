@@ -1089,6 +1089,14 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/mp4")) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            /* The native FH8626 cold-start encoder contract is implemented,
+             * but a complete same-boot reconfiguration transaction is not
+             * hardware-accepted yet. Reject before mutating app_config rather
+             * than falling into the generic channel lifecycle. */
+            send_http_error(req->clntFd, 501);
+            return;
+        }
         if (req->query) {
             char *remain;
             while (req->query) {

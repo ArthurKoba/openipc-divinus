@@ -667,8 +667,11 @@ int media_mjpeg_enable(void) {
 }
 
 int media_mp4_disable(void) {
-    if (plat == HAL_PLATFORM_FH8626)
-        return EXIT_SUCCESS;
+    if (plat == HAL_PLATFORM_FH8626) {
+        HAL_WARNING("media",
+            "FH8626 runtime H.264 reconfiguration is not accepted yet; restart Divinus to apply MP4 settings.\n");
+        return EXIT_FAILURE;
+    }
 
     int ret;
 
@@ -691,6 +694,12 @@ int media_mp4_disable(void) {
 
 int media_mp4_enable(void) {
     int ret;
+
+    if (plat == HAL_PLATFORM_FH8626) {
+        HAL_WARNING("media",
+            "FH8626 runtime H.264 reconfiguration is not accepted yet; restart Divinus to apply MP4 settings.\n");
+        return EXIT_FAILURE;
+    }
 
     int index = take_next_free_channel(true);
 

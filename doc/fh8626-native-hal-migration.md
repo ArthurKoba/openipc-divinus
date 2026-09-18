@@ -1,72 +1,74 @@
 # FH8626V100 native HAL migration
 
-This document is the implementation ledger for the native FH8626V100 HAL. The
-goal is to make Divinus own the generic Fullhan media pipeline in the same
-shape as the other upstream HALs. It is not a second camera profile and it is
-not an external encoded-stream protocol.
+This file records the current migration boundary for FH8626V100 support in Divinus.
 
-## Baseline
+## Target shape
 
-The known-good ANJIA baseline is:
+The target architecture is a normal native Divinus HAL:
 
-- FH8626V100;
-- dual GC1054 sensors, 1280x720 at 25 fps;
-- one H.264 channel, channel 0;
-- baseline profile;
-- CBR, 2048 kbps (`bitrate` in Divinus configuration is kilobits per second);
-- ISP day profile with NR3D disabled by default;
-- ONVIF, NAS recording and network streaming operating through the normal
-  Divinus frontend.
+`GC1054/MIPI -> ISP -> VPU -> PAE/VENC -> Divinus hal_vidstream -> RTSP/fMP4/recording`
 
-The current firmware owner is the behavioral reference while this HAL is
-implemented. Its low-level order is:
+There is no external FH86 encoded-stream protocol in the target design. The old `source: fh86` Unix/socket owner frontend and its wire/transport tests were removed after the native path became the active implementation line.
 
-```text
-sensor/MIPI -> ISP context/MMIO -> VPU system/channel -> ISP start
--> PAE system/channel -> MEDIA_BIND -> PAE encoder start -> VPU enable
--> MEDIA_STREAM_6 dequeue -> PAE_STREAM_STEP release
-```
+## Repository ownership
 
-## Ownership boundary
+Divinus owns generic FH8626 streamer/HAL implementation:
 
-Generic FH8626 media support belongs in `src/hal/full/`:
+- platform identification;
+- FH media-device ownership;
+- sensor/MIPI API boundary;
+- ISP control;
+- VPU/PAE/VENC/JPEG integration;
+- stream dequeue/release;
+- RTX audio integration boundary;
+- streamer-facing telemetry and capability reporting.
 
-- device discovery and exclusive ownership;
-- `/dev/isp`, `/dev/media_process`, `/dev/pae` and `/dev/vmm_userdev`;
-- VMM allocations and mappings;
-- sensor/MIPI driver contract;
-- ISP initialization and runtime control;
-- VPU/PAE lifecycle;
-- H.264 configuration and frame dequeue/release;
-- Divinus `hal_vidstream` delivery.
+Builder/device integration owns AJL33PQ0866-only behavior:
 
-The Builder camera profile remains responsible for:
+- GPIO5 cold-boot sensor reset/bootstrap;
+- WIDE/TELE GPIO4/GPIO14 switching;
+- PTZ/servomotor configuration;
+- IR/white-light/IR-cut and other board GPIO policy;
+- device deployment defaults.
 
-- selecting the active lens on a dual-sensor board;
-- lens reset and board GPIO policy;
-- PTZ and servomotor control;
-- day/night/white-light policy specific to AJL33PQ0866;
-- selecting the camera's ISP preset and deployment defaults.
+Kernel code/patches remain Linux-owned. Shared runtime packaging remains Firmware-owned. Divinus contains no weak board-preparation hook.
 
-No Unix `fh86` owner bridge is part of the target native path. The existing
-bridge remains only as a temporary rollback/test path until native hardware
-acceptance is complete.
+## Current migration result
 
-## Evidence gates
+The native source now:
 
-The production provider may be enabled only after each gate has evidence on
-the target camera:
+- owns the H.264 media pipeline directly;
+- uses best-effort teardown instead of aborting cleanup on the first destructor error;
+- exposes native force-IDR;
+- reports platform/media/capability telemetry;
+- marks FH8626 temperature unavailable;
+- rejects unsafe live MP4 reconfiguration rather than entering the generic channel path;
+- retains a stub provider for deterministic contract validation.
 
-1. exact device identity and exclusive ownership;
-2. sensor/MIPI initialization and stable 720p25 frames;
-3. ISP initialization with the known-good day preset;
-4. VPU/PAE allocation, bind and encoder startup;
-5. descriptor ring mapping, wrap handling and exactly-once release;
-6. Divinus RTSP/fMP4/ONVIF/NAS behavior against the current baseline;
-7. CBR target and runtime rate-control mapping;
-8. force-IDR and reconnect behavior;
-9. same-boot teardown and restart;
-10. camera-specific lens/PTZ behavior after the native path is active.
+The provider is intentionally not production-ready. Its blocker mask describes actual remaining work:
 
-Host tests prove contracts and failure paths only. They do not replace the
-hardware gates above.
+- vendor GC1054/MIPI plug-in dependency;
+- external RTX audio helper dependency;
+- complete runtime video-reconfigure transaction;
+- same-boot teardown/restart acceptance;
+- latest-candidate hardware acceptance.
+
+## Evidence distinctions
+
+Recovered/replayed ABI contracts and host tests are not hardware acceptance. In particular:
+
+- force-IDR is source/reverse-backed but still belongs in the next target regression;
+- JPEG/MJPEG code exists but target acceptance remains unresolved;
+- RTX transport is hardware-proven independently, while the current Divinus helper integration is transitional;
+- full open sensor bring-up is unresolved because current native startup still loads vendor V100 sensor/MIPI objects;
+- same-boot cleanup has stronger source behavior now, but the complete physical resource lifecycle still needs a target stop/restart run.
+
+## Verification entry point
+
+Focused host checks are grouped under:
+
+`tests/fh8626-check.sh`
+
+The authoritative next gate is an OpenIPC ARM1176/musl build of the exact work-branch commit followed by the physical-camera test matrix. The clean Firmware staging direction must consume that exact Divinus candidate rather than an unrelated moving upstream `HEAD`.
+
+Do not restore the removed sidecar/owner architecture to work around a reproduced native bug. Reproduce the failure, fix the native owner or the correctly owning lower layer, and keep camera-specific policy outside Divinus.
