@@ -37,11 +37,6 @@
 #define FH8626_SCRATCH_SIZE  (4u * 1024u * 1024u)
 #define FH8626_ISP_NR3D_QUERY 0x80206926UL
 
-/* Optional Builder-provided board hook.  The generic FH8626 HAL has no
- * knowledge of lens GPIOs; a camera profile may provide this symbol in its
- * patch, while ordinary FH8626 boards simply leave it absent. */
-extern int fh8626_native_board_prepare(void) __attribute__((weak));
-
 struct fh8626_kernel {
     int media_fd, isp_fd, pae_fd, vmm_fd, mem_fd, jpeg_fd;
     struct fh8626_mem3 isp_cfg, vpu_sys, vpu_chn, vpu_chn_jpeg,
@@ -519,12 +514,6 @@ static int kernel_hal_init(void *opaque)
     if (flock(k->lock_fd, LOCK_EX | LOCK_NB) < 0)
         return errno == EWOULDBLOCK ? -EBUSY : -errno;
 
-    if (fh8626_native_board_prepare) {
-        rc = fh8626_native_board_prepare();
-        if (rc)
-            return rc;
-    }
-
     rc = fh_sensor_gc1054_open(&k->sensor, "/usr/lib/fh8626/libmipi.so",
                                "/usr/lib/fh8626/libgc1054_mipi.so");
     if (rc)
@@ -975,6 +964,9 @@ static int kernel_stage_stop(void *opaque)
 {
     struct fh8626_kernel *k = opaque;
     uint32_t zero = 0;
+    int first_error = 0;
+    int rc;
+
     k->running = 0;
     if (k->control_thread_started) {
         pthread_join(k->control_thread, NULL);
@@ -984,11 +976,17 @@ static int kernel_stage_stop(void *opaque)
         pthread_join(k->thread, NULL);
         k->thread_started = 0;
     }
-    if (k->pae_fd >= 0)
-        (void)call_ioctl(k->pae_fd, FH_PAE_STOP_RECV, &zero);
-    if (k->isp_fd >= 0)
-        (void)call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &zero);
-    return 0;
+    if (k->pae_fd >= 0) {
+        rc = call_ioctl(k->pae_fd, FH_PAE_STOP_RECV, &zero);
+        if (rc && !first_error)
+            first_error = rc;
+    }
+    if (k->isp_fd >= 0) {
+        rc = call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &zero);
+        if (rc && !first_error)
+            first_error = rc;
+    }
+    return first_error;
 }
 
 static int kernel_noop(void *opaque)
@@ -1352,14 +1350,18 @@ int fh8626_kernel_jpeg_deinit_mode(struct fh8626_kernel *k, uint32_t wanted_mode
 
 int fh8626_kernel_jpeg_deinit(struct fh8626_kernel *k)
 {
+    int first_error = 0;
     int rc;
 
     if (!k)
         return -EINVAL;
     rc = fh8626_kernel_jpeg_deinit_mode(k, FH8626_JPEG_MODE_MJPEG);
     if (rc && rc != -ENODEV)
-        return rc;
-    return fh8626_kernel_jpeg_deinit_mode(k, FH8626_JPEG_MODE_SNAPSHOT);
+        first_error = rc;
+    rc = fh8626_kernel_jpeg_deinit_mode(k, FH8626_JPEG_MODE_SNAPSHOT);
+    if (rc && rc != -ENODEV && !first_error)
+        first_error = rc;
+    return first_error;
 }
 
 int fh8626_kernel_start(struct fh8626_kernel **out,
@@ -1408,21 +1410,31 @@ int fh8626_kernel_start(struct fh8626_kernel **out,
 
 int fh8626_kernel_stop(struct fh8626_kernel *k)
 {
+    int first_error = 0;
+    int rc;
+
     if (!k)
         return -EINVAL;
-    if (k->jpeg_lock_ready)
-        (void)fh8626_kernel_jpeg_deinit(k);
+    if (k->jpeg_lock_ready) {
+        rc = fh8626_kernel_jpeg_deinit(k);
+        if (rc && !first_error)
+            first_error = rc;
+    }
     if (k->runtime.life.state != FH8626_LIFE_COLD)
-        (void)fh8626_native_runtime_stop(&k->runtime);
+        rc = fh8626_native_runtime_stop(&k->runtime);
     else
-        (void)kernel_stage_stop(k);
+        rc = kernel_stage_stop(k);
+    if (rc && !first_error)
+        first_error = rc;
+
     free(k->scratch);
     free_mem(&k->pae_chn); free_mem(&k->pae_sys);
     free_mem(&k->vpu_chn_jpeg);
     free_mem(&k->vpu_chn);
     free_mem(&k->vpu_sys); free_mem(&k->isp_cfg);
-    if (k->mmio)
-        munmap((void *)k->mmio, FH8626_ISP_MMIO_SIZE);
+    if (k->mmio && munmap((void *)k->mmio, FH8626_ISP_MMIO_SIZE) < 0 &&
+        !first_error)
+        first_error = -errno;
     fh_sensor_gc1054_close(&k->sensor);
     if (k->mem_fd >= 0) close(k->mem_fd);
     if (k->vmm_fd >= 0) close(k->vmm_fd);
@@ -1433,7 +1445,7 @@ int fh8626_kernel_stop(struct fh8626_kernel *k)
     if (k->jpeg_lock_ready)
         pthread_mutex_destroy(&k->jpeg_lock);
     free(k);
-    return 0;
+    return first_error;
 }
 
 int fh8626_kernel_is_running(const struct fh8626_kernel *k)

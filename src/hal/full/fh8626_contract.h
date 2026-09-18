@@ -59,7 +59,10 @@ struct fh8626_capabilities {
     fh8626_capability_state rate_control_mapping;
     fh8626_capability_state vpss_1080p_scaling;
     fh8626_capability_state h265;
+    fh8626_capability_state jpeg_snapshot;
+    fh8626_capability_state mjpeg;
     fh8626_capability_state audio;
+    fh8626_capability_state temperature;
 };
 
 void fh8626_lifecycle_reset(struct fh8626_lifecycle *life);

@@ -91,8 +91,13 @@ static void test_capabilities(void)
     assert(caps.stream_lease_release == FH8626_CAP_PROVEN);
     assert(caps.same_boot_full_teardown == FH8626_CAP_UNRESOLVED);
     assert(caps.idr_request == FH8626_CAP_UNRESOLVED);
+    assert(caps.rate_control_mapping == FH8626_CAP_PROVEN);
     assert(caps.vpss_1080p_scaling == FH8626_CAP_UNRESOLVED);
     assert(caps.h265 == FH8626_CAP_UNSUPPORTED);
+    assert(caps.jpeg_snapshot == FH8626_CAP_UNRESOLVED);
+    assert(caps.mjpeg == FH8626_CAP_UNRESOLVED);
+    assert(caps.audio == FH8626_CAP_PROVEN);
+    assert(caps.temperature == FH8626_CAP_UNSUPPORTED);
 }
 
 int main(void)

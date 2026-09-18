@@ -63,22 +63,27 @@ static int unwind(struct fh8626_native_runtime *runtime, unsigned completed)
 {
     int first_error = 0;
 
+    /* Teardown is best-effort. A failed destructor must not prevent lower
+     * dependency layers from receiving their cleanup call. The simple
+     * lifecycle state cannot represent an arbitrary partially-destroyed graph,
+     * so an errored terminal unwind is reset to COLD and the error is returned
+     * to the caller instead of advertising a retryable intermediate state. */
     while (completed) {
         struct runtime_stage stage = stage_at(runtime, completed - 1u);
         int ret = stage.down(runtime->opaque);
+
         if (ret) {
             if (!first_error)
                 first_error = ret;
-            break;
-        }
-        ret = fh8626_lifecycle_apply(&runtime->life, stage.down_event);
-        if (ret) {
-            if (!first_error)
+        } else {
+            ret = fh8626_lifecycle_apply(&runtime->life, stage.down_event);
+            if (ret && !first_error)
                 first_error = ret;
-            break;
         }
         completed--;
     }
+    if (first_error)
+        fh8626_lifecycle_reset(&runtime->life);
     return first_error;
 }
 

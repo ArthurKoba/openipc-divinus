@@ -146,9 +146,12 @@ struct fh8626_capabilities fh8626_capabilities_current(void)
     caps.isp_direct_kernel_bringup = FH8626_CAP_PROVEN;
     caps.same_boot_full_teardown = FH8626_CAP_UNRESOLVED;
     caps.idr_request = FH8626_CAP_UNRESOLVED;
-    caps.rate_control_mapping = FH8626_CAP_UNRESOLVED;
+    caps.rate_control_mapping = FH8626_CAP_PROVEN;
     caps.vpss_1080p_scaling = FH8626_CAP_UNRESOLVED;
     caps.h265 = FH8626_CAP_UNSUPPORTED;
-    caps.audio = FH8626_CAP_UNRESOLVED;
+    caps.jpeg_snapshot = FH8626_CAP_UNRESOLVED;
+    caps.mjpeg = FH8626_CAP_UNRESOLVED;
+    caps.audio = FH8626_CAP_PROVEN;
+    caps.temperature = FH8626_CAP_UNSUPPORTED;
     return caps;
 }

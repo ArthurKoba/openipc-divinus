@@ -180,7 +180,7 @@ static void test_lease_blocks_stop(void)
     assert(fh8626_native_runtime_stop(&runtime) == 0);
 }
 
-static void test_stop_failure_is_retryable(void)
+static void test_stop_failure_is_best_effort(void)
 {
     struct fake_world world;
     struct fh8626_native_runtime runtime;
@@ -191,11 +191,10 @@ static void test_stop_failure_is_retryable(void)
     assert(fh8626_native_runtime_start(&runtime) == 0);
     world.fail_down = 3;
     assert(fh8626_native_runtime_stop(&runtime) == -EIO);
-    assert(runtime.life.state == FH8626_LIFE_PIPELINE_READY);
-    world.fail_down = 0;
-    assert(fh8626_native_runtime_stop(&runtime) == 0);
+    assert(!strcmp(world.log, "HSPVTtvpsh"));
     assert(runtime.life.state == FH8626_LIFE_COLD);
-    assert(runtime.stop_failures == 1u && runtime.stops == 1u);
+    assert(runtime.stop_failures == 1u);
+    assert(fh8626_native_runtime_stop(&runtime) == 0);
 }
 
 int main(void)
@@ -203,7 +202,7 @@ int main(void)
     test_full_stub_pipeline();
     test_start_failure_rolls_back();
     test_lease_blocks_stop();
-    test_stop_failure_is_retryable();
+    test_stop_failure_is_best_effort();
     puts("fh8626_native_runtime PASS");
     return 0;
 }
