@@ -89,6 +89,35 @@ static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
 
 static void fh8626_api_video_disconnect_clients(void);
 
+static int fh8626_api_parse_u32(const char *value, unsigned int min,
+    unsigned int max, unsigned int *out)
+{
+    char *end = NULL;
+    unsigned long parsed;
+
+    if (!value || !*value || !out)
+        return -EINVAL;
+    errno = 0;
+    parsed = strtoul(value, &end, 10);
+    if (errno || end == value || *end || parsed < min || parsed > max)
+        return -ERANGE;
+    *out = (unsigned int)parsed;
+    return 0;
+}
+
+static int fh8626_api_jpeg_mjpeg_compatible(const struct AppConfig *cfg)
+{
+    if (!cfg)
+        return -EINVAL;
+    if (!cfg->jpeg_enable || !cfg->mjpeg_enable)
+        return 0;
+    if (cfg->jpeg_width > cfg->mjpeg_width ||
+        cfg->jpeg_height > cfg->mjpeg_height ||
+        cfg->jpeg_qfactor != cfg->mjpeg_qfactor)
+        return -ENOTSUP;
+    return 0;
+}
+
 static int fh8626_api_restore_runtime_state(void)
 {
     int rc;
@@ -101,6 +130,45 @@ static int fh8626_api_restore_runtime_state(void)
     region_invalidate_all();
     media_capture_discontinuity();
     return 0;
+}
+
+static int fh8626_api_restart_app_config(const struct AppConfig *next,
+    const struct AppConfig *old)
+{
+    int rc, rollback_rc;
+
+    if (!next || !old)
+        return -EINVAL;
+
+    media_capture_discontinuity();
+    fh8626_api_video_disconnect_clients();
+    app_config = *next;
+
+    rc = sdk_stop();
+    if (rc != EXIT_SUCCESS) {
+        app_config = *old;
+        return -EIO;
+    }
+
+    rc = sdk_start();
+    if (rc == EXIT_SUCCESS)
+        rc = fh8626_api_restore_runtime_state();
+    else
+        rc = -EIO;
+    if (!rc)
+        return 0;
+
+    if (fh8626_native_active() && sdk_stop() != EXIT_SUCCESS)
+        return -EUCLEAN;
+
+    app_config = *old;
+    rollback_rc = sdk_start();
+    if (rollback_rc != EXIT_SUCCESS)
+        return -EUCLEAN;
+    rollback_rc = fh8626_api_restore_runtime_state();
+    if (rollback_rc)
+        return -EUCLEAN;
+    return -EIO;
 }
 
 static int fh8626_api_video_restart(const struct fh8626_api_video_cfg *next,
@@ -1282,7 +1350,70 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/jpeg")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            struct AppConfig old_app = app_config;
+            struct AppConfig next_app = app_config;
+            int changed = 0;
+            int rc;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                unsigned int parsed;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "width")) {
+                    rc = fh8626_api_parse_u32(value, 160u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.jpeg_width = parsed;
+                } else if (EQUALS(key, "height")) {
+                    rc = fh8626_api_parse_u32(value, 120u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.jpeg_height = parsed;
+                } else if (EQUALS(key, "qfactor")) {
+                    rc = fh8626_api_parse_u32(value, 1u, 99u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.jpeg_qfactor = parsed;
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            rc = fh8626_api_jpeg_mjpeg_compatible(&next_app);
+            if (rc) {
+                send_http_error(req->clntFd, 501);
+                return;
+            }
+            changed = next_app.jpeg_width != old_app.jpeg_width ||
+                next_app.jpeg_height != old_app.jpeg_height ||
+                next_app.jpeg_qfactor != old_app.jpeg_qfactor;
+
+            if (changed && next_app.jpeg_enable && !next_app.mjpeg_enable) {
+                rc = fh8626_api_restart_app_config(&next_app, &old_app);
+                if (rc) {
+                    send_http_error(req->clntFd, rc == -EUCLEAN ? 503 : 500);
+                    return;
+                }
+            } else {
+                app_config = next_app;
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
@@ -1322,7 +1453,105 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/mjpeg")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            struct AppConfig old_app = app_config;
+            struct AppConfig next_app = app_config;
+            int rc;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                unsigned int parsed;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "enable")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        next_app.mjpeg_enable = true;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_app.mjpeg_enable = false;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                } else if (EQUALS(key, "width")) {
+                    rc = fh8626_api_parse_u32(value, 160u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_width = parsed;
+                } else if (EQUALS(key, "height")) {
+                    rc = fh8626_api_parse_u32(value, 120u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_height = parsed;
+                } else if (EQUALS(key, "fps")) {
+                    rc = fh8626_api_parse_u32(value, 1u, 30u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_fps = parsed;
+                } else if (EQUALS(key, "bitrate")) {
+                    rc = fh8626_api_parse_u32(value, 32u, 65535u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_bitrate = parsed;
+                } else if (EQUALS(key, "qfactor")) {
+                    rc = fh8626_api_parse_u32(value, 1u, 99u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_qfactor = parsed;
+                } else if (EQUALS(key, "mode")) {
+                    if (EQUALS_CASE(value, "CBR"))
+                        next_app.mjpeg_mode = HAL_VIDMODE_CBR;
+                    else if (EQUALS_CASE(value, "VBR"))
+                        next_app.mjpeg_mode = HAL_VIDMODE_VBR;
+                    else if (EQUALS_CASE(value, "QP"))
+                        next_app.mjpeg_mode = HAL_VIDMODE_QP;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            rc = fh8626_api_jpeg_mjpeg_compatible(&next_app);
+            if (rc) {
+                send_http_error(req->clntFd, 501);
+                return;
+            }
+
+            if (memcmp(&next_app.mjpeg_enable, &old_app.mjpeg_enable,
+                       sizeof(next_app.mjpeg_enable)) ||
+                next_app.mjpeg_width != old_app.mjpeg_width ||
+                next_app.mjpeg_height != old_app.mjpeg_height ||
+                next_app.mjpeg_fps != old_app.mjpeg_fps ||
+                next_app.mjpeg_bitrate != old_app.mjpeg_bitrate ||
+                next_app.mjpeg_qfactor != old_app.mjpeg_qfactor ||
+                next_app.mjpeg_mode != old_app.mjpeg_mode) {
+                rc = fh8626_api_restart_app_config(&next_app, &old_app);
+                if (rc) {
+                    send_http_error(req->clntFd, rc == -EUCLEAN ? 503 : 500);
+                    return;
+                }
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
@@ -1742,28 +1971,61 @@ void respond_request(http_request_t *req) {
         if (EQUALS(req->method, "POST")) {
             char *type = request_header("Content-Type");
             if (STARTS_WITH(type, "multipart/form-data")) {
-                char *bound = strstr(type, "boundary=") + strlen("boundary=");
+                char *boundary_pos = strstr(type, "boundary=");
+                char *bound;
+
+                if (!boundary_pos || !req->payload) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                bound = boundary_pos + strlen("boundary=");
 
                 char *payloadb = strstr(req->payload, bound);
-                payloadb = memstr(payloadb, "\r\n\r\n", req->total - (payloadb - req->input), 4);
-                if (payloadb) payloadb += 4;
+                if (!payloadb) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                payloadb = memstr(payloadb, "\r\n\r\n",
+                    req->total - (payloadb - req->input), 4);
+                if (!payloadb) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                payloadb += 4;
 
                 char *payloade = memstr(payloadb, bound,
                     req->total - (payloadb - req->input), strlen(bound));
-                if (payloade) payloade -= 4;
+                if (!payloade || payloade < payloadb + 4) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                payloade -= 4;
+                if (payloade <= payloadb) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
 
                 char path[32];
+                size_t payload_len = (size_t)(payloade - payloadb);
 
-                if (!memcmp(payloadb, "\x89\x50\x4E\x47\xD\xA\x1A\xA", 8))
+                if (payload_len >= 8 &&
+                    !memcmp(payloadb, "\x89\x50\x4E\x47\xD\xA\x1A\xA", 8))
                     sprintf(path, "/tmp/osd%d.png", id);
                 else
                     sprintf(path, "/tmp/osd%d.bmp", id);
 
                 FILE *img = fopen(path, "wb");
-                fwrite(payloadb, sizeof(char), payloade - payloadb, img);
+                if (!img || fwrite(payloadb, 1, payload_len, img) != payload_len) {
+                    if (img)
+                        fclose(img);
+                    send_http_error(req->clntFd, 500);
+                    return;
+                }
                 fclose(img);
 
-                strcpy(osds[id].text, "");
+                osds[id].text[0] = '\0';
+                strncpy(osds[id].img, path, sizeof(osds[id].img) - 1);
+                osds[id].img[sizeof(osds[id].img) - 1] = '\0';
                 osds[id].updt = 1;
             } else {
                 respLen = sprintf(response,

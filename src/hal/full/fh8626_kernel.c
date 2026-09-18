@@ -1582,7 +1582,7 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
     if (!k || !width || !height || !fps)
         return -EINVAL;
     index = jpeg_slot_index(mode);
-    if (index < 0 || width > 2048u || height > 2048u || quality > 98u)
+    if (index < 0 || width > 2048u || height > 2048u || quality > 99u)
         return -EINVAL;
     pthread_mutex_lock(&k->jpeg_lock);
     if (k->jpeg_slot[index].ready) {
