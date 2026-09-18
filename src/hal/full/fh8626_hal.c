@@ -257,7 +257,9 @@ int fh8626_sdk_start(fh8626_video_sink sink)
             pthread_mutex_unlock(&kernel_context_lock);
             return -EBUSY;
         }
-        memset(fh8626_osd_request, 0, sizeof(fh8626_osd_request));
+        /* Region staging is process-owned metadata, not kernel/VMM state.
+         * Preserve it across structural restarts so create/setbitmap cannot
+         * race a new owner and lose a pending overlay transaction. */
         native_ret = fh8626_kernel_start(&kernel_context, &config, sink);
         if (!native_ret) {
             memset(fh8626_state, 0, sizeof(fh8626_state));

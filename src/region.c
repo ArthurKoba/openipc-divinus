@@ -1,9 +1,17 @@
 #include "region.h"
 
+#include <errno.h>
+
 osd osds[MAX_OSD];
 pthread_t regionPid = 0;
 char timefmt[64];
 unsigned int rxb_l, txb_l, cpu_l[6];
+
+static int fh8626_osd_retryable(int rc)
+{
+    return rc == -ENODEV || rc == -EBUSY || rc == -EAGAIN ||
+        rc == -ENOMEM || rc == -EIO || rc == -ETIMEDOUT;
+}
 
 void region_fill_formatted(char* str) {
     char out[80] = "";
@@ -366,10 +374,12 @@ void *region_thread(void *arg) {
 
     while (keepRunning) {
         for (char id = 0; id < MAX_OSD; id++) {
+            int retry_update = 0;
             if (!EMPTY(osds[id].text))
             {
                 char out[80];
                 strncpy(out, osds[id].text, sizeof(out) - 1);
+                out[sizeof(out) - 1] = '\0';
                 if (strstr(out, "$"))
                 {
                     region_fill_formatted(out);
@@ -422,8 +432,11 @@ found_font:;
                             int rc = fh8626_region_create(id, rect, osds[id].opal);
                             if (!rc)
                                 rc = fh8626_region_setbitmap(id, &bitmap);
-                            if (rc)
+                            if (rc) {
                                 HAL_WARNING("region", "FH8626 OSD %d update failed: %#x\n", id, rc);
+                                if (fh8626_osd_retryable(rc))
+                                    retry_update = 1;
+                            }
                             break;
                         }
                         case HAL_PLATFORM_GM:
@@ -461,7 +474,10 @@ found_font:;
                 char img[64];
                 if (EMPTY(osds[id].img))
                     sprintf(img, "/tmp/osd%d.bmp", id);
-                else strncpy(img, osds[id].img, sizeof(osds[id].img) - 1);
+                else {
+                    strncpy(img, osds[id].img, sizeof(img) - 1);
+                    img[sizeof(img) - 1] = '\0';
+                }
                 if (!access(img, F_OK))
                 {
                     hal_bitmap bitmap;
@@ -497,8 +513,11 @@ found_font:;
                                 int rc = fh8626_region_create(id, rect, osds[id].opal);
                                 if (!rc)
                                     rc = fh8626_region_setbitmap(id, &bitmap);
-                                if (rc)
+                                if (rc) {
                                     HAL_WARNING("region", "FH8626 OSD %d update failed: %#x\n", id, rc);
+                                    if (fh8626_osd_retryable(rc))
+                                        retry_update = 1;
+                                }
                                 break;
                             }
                             case HAL_PLATFORM_GM:
@@ -541,8 +560,11 @@ found_font:;
 #elif defined(__arm__) && !defined(__ARM_PCS_VFP)
                         case HAL_PLATFORM_FH8626: {
                             int rc = fh8626_region_destroy(id);
-                            if (rc)
+                            if (rc) {
                                 HAL_WARNING("region", "FH8626 OSD %d destroy failed: %#x\n", id, rc);
+                                if (fh8626_osd_retryable(rc))
+                                    retry_update = 1;
+                            }
                             break;
                         }
                         case HAL_PLATFORM_GM:  gm_region_destroy(id); break;
@@ -555,7 +577,8 @@ found_font:;
 #endif
                     }
             }
-            osds[id].updt = 0;
+            if (!retry_update)
+                osds[id].updt = 0;
         }
         sleep(1);
     }
