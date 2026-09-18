@@ -6,6 +6,7 @@
 #include "fh8626_cf8ec_gamma_presets.h"
 #include "fh8626_cedc0_tables.h"
 #include "fh8626_stock_ae_state_ref.h"
+#include "fh8626_saturation.h"
 
 _Static_assert(FH_ISP_CTX_SIZE > FH_ISP_SENSOR_CB_OFF + FH_ISP_SENSOR_CB_SIZE, "ISP context too small");
 _Static_assert(FH_ISP_MMIO_PTR_OFF == FH_ISP_PARAM_SIZE, "stock MMIO pointer must follow SREG payload");
@@ -546,6 +547,18 @@ int fh_isp_runtime_load_param(struct fh_isp_runtime *rt, const void *profile, si
     memcpy(rt->ctx + 0x00, p + 0x00, 4);
     memcpy(rt->ctx + 0x10, p + 0x10, 4);
     memcpy(rt->ctx + 0x2c, p + 0x2c, FH_ISP_PARAM_SIZE - 0x2c);
+
+    /*
+     * Stock DCCE4 calls 274534 immediately after BEFB8 LoadIspParam.
+     * 274534 gets the current saturation public record and snapshots its
+     * 12-byte curve as the baseline used by the later mode=1 wrapper.
+     */
+    memcpy(rt->saturation_baseline, rt->ctx + 0x2dcu,
+        FH8626_SATURATION_CURVE_BYTES);
+    rt->saturation_baseline_valid = 1;
+    rt->grayscale_saved_valid = 0;
+    rt->grayscale_enabled = 0;
+
     rt->ctx[0x367] |= 0x80;
     rt->params_dirty = 1;
     /* C73F8 keeps both history bands in module-static storage outside the
@@ -1676,6 +1689,54 @@ int fh_isp_runtime_set_d1724_stats(struct fh_isp_runtime *rt,
 /* D1DB0 exact consumer algorithm. The stock GOT 0x316D14 coefficient object
  * is installed by reset; the setter remains available for controlled IQ
  * overrides. */
+int fh_isp_runtime_set_grayscale(struct fh_isp_runtime *rt, int enabled)
+{
+    uint8_t old_ctx[FH8626_SATURATION_CTX_BYTES];
+    uint8_t next_ctx[FH8626_SATURATION_CTX_BYTES];
+    int rc;
+
+    if (!rt || !rt->mmio)
+        return -EINVAL;
+
+    enabled = !!enabled;
+    if (enabled == rt->grayscale_enabled)
+        return 0;
+
+    memcpy(old_ctx, rt->ctx + 0x2d8u, sizeof(old_ctx));
+
+    if (enabled) {
+        if (!rt->saturation_baseline_valid)
+            return -EAGAIN;
+        memcpy(rt->grayscale_saved_ctx, old_ctx, sizeof(old_ctx));
+        rt->grayscale_saved_valid = 1;
+        rc = fh8626_saturation_build_stock_night(old_ctx,
+            rt->saturation_baseline, next_ctx);
+        if (rc) {
+            rt->grayscale_saved_valid = 0;
+            return rc;
+        }
+    } else {
+        if (!rt->grayscale_saved_valid)
+            return -EAGAIN;
+        memcpy(next_ctx, rt->grayscale_saved_ctx, sizeof(next_ctx));
+    }
+
+    memcpy(rt->ctx + 0x2d8u, next_ctx, sizeof(next_ctx));
+    rc = fh_isp_runtime_apply_d1db0_lut(rt);
+    if (rc) {
+        memcpy(rt->ctx + 0x2d8u, old_ctx, sizeof(old_ctx));
+        (void)fh_isp_runtime_apply_d1db0_lut(rt);
+        if (enabled)
+            rt->grayscale_saved_valid = 0;
+        return rc;
+    }
+
+    rt->grayscale_enabled = enabled;
+    if (!enabled)
+        rt->grayscale_saved_valid = 0;
+    return 0;
+}
+
 int fh_isp_runtime_apply_d1db0_lut(struct fh_isp_runtime *rt)
 {
     uint32_t gain, scalar, d9, r;

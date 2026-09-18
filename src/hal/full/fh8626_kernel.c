@@ -2244,3 +2244,19 @@ int fh8626_kernel_osd_destroy(struct fh8626_kernel *k, uint32_t id)
     cleanup_rc = release_osd_slot(&old);
     return cleanup_rc;
 }
+
+int fh8626_kernel_set_grayscale(struct fh8626_kernel *k, int enabled)
+{
+    int rc;
+
+    if (!k || !k->running || !k->control_lock_ready)
+        return -ENODEV;
+
+    pthread_mutex_lock(&k->control_lock);
+    if (!k->running)
+        rc = -ENODEV;
+    else
+        rc = fh_isp_runtime_set_grayscale(&k->isp_runtime, enabled);
+    pthread_mutex_unlock(&k->control_lock);
+    return rc;
+}

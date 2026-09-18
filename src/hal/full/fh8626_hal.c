@@ -369,6 +369,18 @@ int fh8626_set_mirror_flip(int mirror, int flip)
 #endif
 }
 
+int fh8626_set_grayscale(int enabled)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (!kernel_context)
+        return -ENODEV;
+    return fh8626_kernel_set_grayscale(kernel_context, enabled);
+#else
+    (void)enabled;
+    return -ENOTSUP;
+#endif
+}
+
 int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
     uint32_t quality, uint32_t fps, uint32_t bitrate, uint32_t rc_mode)
 {

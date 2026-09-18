@@ -324,6 +324,12 @@ void request_idr(void) {
 void set_grayscale(bool active) {
     pthread_mutex_lock(&chnMtx);
     switch (plat) {
+        case HAL_PLATFORM_FH8626: {
+            int rc = fh8626_set_grayscale(active);
+            if (rc)
+                HAL_WARNING("media", "FH8626 grayscale update failed with %#x\n", rc);
+            break;
+        }
 #if defined(__ARM_PCS_VFP)
         case HAL_PLATFORM_I6:  i6_channel_grayscale(active); break;
         case HAL_PLATFORM_I6C: i6c_channel_grayscale(active); break;

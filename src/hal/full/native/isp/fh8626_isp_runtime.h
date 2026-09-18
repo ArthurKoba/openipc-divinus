@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "fh8626_sensor_gc1054.h"
+#include "fh8626_saturation.h"
 
 #define FH_ISP_MMIO_PHYS 0xE8400000u
 #define FH_ISP_MMIO_SIZE 0x4000u
@@ -136,6 +137,11 @@ struct fh_isp_runtime {
     void *awb_init_opaque;
     struct fh_isp_stock_d1db0_coeffs d1db0_coeffs;
     int d1db0_coeffs_valid;
+    uint8_t saturation_baseline[FH8626_SATURATION_CURVE_BYTES];
+    int saturation_baseline_valid;
+    uint8_t grayscale_saved_ctx[FH8626_SATURATION_CTX_BYTES];
+    int grayscale_saved_valid;
+    int grayscale_enabled;
     const uint32_t (*d16a4_rows)[6]; /* stock GOT 0x3165D4, 8x24 bytes */
     struct fh_isp_stock_d1724_stat24 d1724_stats[32];
     int d1724_stats_valid;
@@ -191,6 +197,7 @@ int fh_isp_runtime_apply_d0e5c(struct fh_isp_runtime *rt);
 int fh_isp_runtime_apply_ce764(struct fh_isp_runtime *rt);
 int fh_isp_runtime_apply_cfd70(struct fh_isp_runtime *rt);
 int fh_isp_runtime_apply_d1db0_lut(struct fh_isp_runtime *rt);
+int fh_isp_runtime_set_grayscale(struct fh_isp_runtime *rt, int enabled);
 int fh_isp_runtime_set_d1db0_coeffs(struct fh_isp_runtime *rt, const struct fh_isp_stock_d1db0_coeffs *coeffs);
 int fh_isp_runtime_set_d16a4_rows(struct fh_isp_runtime *rt, const uint32_t rows[8][6]);
 int fh_isp_runtime_set_d1724_stats(struct fh_isp_runtime *rt, const struct fh_isp_stock_d1724_stat24 stats[32]);
