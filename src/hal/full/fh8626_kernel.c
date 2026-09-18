@@ -786,8 +786,10 @@ static int kernel_video_create(void *opaque)
         uint32_t readback[2] = {0u, 0u};
         if (call_ioctl(k->isp_fd, FH8626_VPU_SET_FRAMECTRL, pace) ||
             call_ioctl(k->isp_fd, FH8626_VPU_GET_FRAMECTRL, readback) ||
-            readback[0] != pace[0] || readback[1] != pace[1])
-            return -EIO;
+            readback[0] != pace[0] || readback[1] != pace[1]) {
+            rc = -EIO;
+            goto fail;
+        }
     }
     if (call_ioctl(k->isp_fd, FH8626_ISP_START, NULL)) {
         rc = -EIO;
@@ -823,8 +825,10 @@ static int kernel_video_create(void *opaque)
     fh8626_ae_runtime_init_passive(&k->ae_runtime, k->isp_runtime.ctx,
         k->mmio, &k->sensor, NULL, NULL, kernel_ae_timing, k);
     if (fh8626_ae_runtime_enable_observe(&k->ae_runtime, 1) ||
-        fh8626_ae_runtime_enable_commit(&k->ae_runtime, 1))
-        return -EIO;
+        fh8626_ae_runtime_enable_commit(&k->ae_runtime, 1)) {
+        rc = -EIO;
+        goto fail;
+    }
     if (call_ioctl(k->pae_fd, FH8626_PAE_SYS_QUERY, &need)) {
         rc = -EIO;
         goto fail;
@@ -870,8 +874,10 @@ static int kernel_video_create(void *opaque)
     rc_config.rc_mode = k->config.rc_mode;
     rc_config.frame_rate_packed = FH8626_OWNER_FPS_PACKED;
     rc_config.init_qp = 38;
-    if (k->config.bitrate_kbps > UINT32_MAX / 1000u)
-        return -ERANGE;
+    if (k->config.bitrate_kbps > UINT32_MAX / 1000u) {
+        rc = -ERANGE;
+        goto fail;
+    }
     rc_config.bitrate_or_rate = k->config.bitrate_kbps * 1000u;
     rc_config.i_min_qp = 30; rc_config.i_max_qp = 50;
     rc_config.p_min_qp = 30; rc_config.p_max_qp = 50;
