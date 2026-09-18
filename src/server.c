@@ -1098,14 +1098,53 @@ void respond_request(http_request_t *req) {
 
     if (EQUALS(req->uri, "/api/mp4")) {
         if (req->query && plat == HAL_PLATFORM_FH8626) {
-            /* The native FH8626 cold-start encoder contract is implemented,
-             * but a complete same-boot reconfiguration transaction is not
-             * hardware-accepted yet. Reject before mutating app_config rather
-             * than falling into the generic channel lifecycle. */
-            send_http_error(req->clntFd, 501);
-            return;
-        }
-        if (req->query) {
+            char *remain;
+            int changed = 0;
+
+            /*
+             * Exact live FH boundary: bitrate-only realtime RC is recovered
+             * for VBR/AVBR. Geometry/FPS/profile/mode/GOP still require the
+             * cold/restart transaction and are rejected before app_config is
+             * mutated.
+             */
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                long parsed;
+                int rc;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+                if (!EQUALS(key, "bitrate")) {
+                    send_http_error(req->clntFd, 501);
+                    return;
+                }
+
+                errno = 0;
+                parsed = strtol(value, &remain, 10);
+                if (errno || remain == value || *remain || parsed < 32 ||
+                    parsed > UINT16_MAX) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                rc = fh8626_set_bitrate((uint32_t)parsed);
+                if (rc) {
+                    send_http_error(req->clntFd,
+                        rc == -EOPNOTSUPP ? 501 : 500);
+                    return;
+                }
+                app_config.mp4_bitrate = (unsigned int)parsed;
+                changed = 1;
+            }
+            if (!changed) {
+                send_http_error(req->clntFd, 400);
+                return;
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");

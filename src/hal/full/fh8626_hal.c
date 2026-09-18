@@ -328,6 +328,18 @@ int fh8626_request_idr(void)
 #endif
 }
 
+int fh8626_set_bitrate(uint32_t bitrate_kbps)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (!kernel_context)
+        return -ENODEV;
+    return fh8626_kernel_set_bitrate(kernel_context, bitrate_kbps);
+#else
+    (void)bitrate_kbps;
+    return -ENOTSUP;
+#endif
+}
+
 int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
     uint32_t quality, uint32_t fps, uint32_t bitrate, uint32_t rc_mode)
 {

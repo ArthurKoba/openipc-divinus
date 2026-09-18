@@ -26,6 +26,7 @@ int fh8626_sdk_start(fh8626_video_sink sink);
 int fh8626_sdk_stop(void);
 int fh8626_native_active(void);
 int fh8626_request_idr(void);
+int fh8626_set_bitrate(uint32_t bitrate_kbps);
 int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
     uint32_t quality, uint32_t fps, uint32_t bitrate, uint32_t rc_mode);
 void fh8626_jpeg_deinit(void);

@@ -1717,3 +1717,39 @@ int fh8626_kernel_request_idr(struct fh8626_kernel *k)
     control.channel = FH8626_NATIVE_CHANNEL;
     return fh_h264_force_i(&control);
 }
+
+int fh8626_kernel_set_bitrate(struct fh8626_kernel *k, uint32_t bitrate_kbps)
+{
+    struct fh_h264_control control;
+    struct fh_pae_rc_wire current;
+    struct fh_pae_rc_realtime_wire realtime;
+    uint32_t rate;
+    int rc;
+
+    if (!k || k->pae_fd < 0 || !k->running || !bitrate_kbps)
+        return -EINVAL;
+    if (bitrate_kbps > UINT32_MAX / 1000u)
+        return -ERANGE;
+
+    memset(&control, 0, sizeof(control));
+    control.ioctl = kernel_h264_ioctl;
+    control.opaque = k;
+    control.channel = FH8626_NATIVE_CHANNEL;
+
+    rc = fh_h264_get_rc(&control, &current);
+    if (rc)
+        return rc;
+
+    if (current.rc_mode != FH_PAE_RC_VBR &&
+        current.rc_mode != FH_PAE_RC_AVBR)
+        return -EOPNOTSUPP;
+
+    rate = bitrate_kbps * 1000u;
+    rc = fh_h264_build_realtime_bitrate(&current, rate, &realtime);
+    if (rc)
+        return rc;
+    rc = fh_h264_change_rc_realtime(&control, &realtime);
+    if (!rc)
+        k->config.bitrate_kbps = bitrate_kbps;
+    return rc;
+}
