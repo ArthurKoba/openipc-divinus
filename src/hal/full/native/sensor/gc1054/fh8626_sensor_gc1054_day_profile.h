@@ -1,6 +1,7 @@
 #ifndef FH8626_GC1054_DAY_PROFILE_H
 #define FH8626_GC1054_DAY_PROFILE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 /*

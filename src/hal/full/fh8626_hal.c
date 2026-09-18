@@ -222,7 +222,7 @@ int fh8626_sdk_start(fh8626_video_sink sink)
     config = (struct fh8626_native_config){
         app_config.mp4_width, app_config.mp4_height, app_config.mp4_fps,
         app_config.mp4_profile == HAL_VIDPROFILE_MAIN ? 0x4du : 0x42u,
-        app_config.isp_mirror ? 1u : 0u, app_config.isp_flip ? 1u : 0u,
+        app_config.mirror ? 1u : 0u, app_config.flip ? 1u : 0u,
         app_config.mp4_mode == HAL_VIDMODE_VBR ? 0u :
         app_config.mp4_mode == HAL_VIDMODE_AVBR ? 4u : 1u,
         app_config.mp4_bitrate};
