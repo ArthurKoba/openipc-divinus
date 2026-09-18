@@ -40,6 +40,10 @@ Divinus now owns the validated FH8626 RTX microphone capture transaction directl
 
 This source integration is still target-unaccepted as a Divinus candidate. The provider therefore keeps a dedicated audio hardware-acceptance blocker. Speaker/amplifier GPIO policy is deliberately not part of this backend.
 
+### ISP profile data
+
+The native ISP algorithms and many stock tables are source-owned, but startup still loads the complete GC1054 day SREG payload from `/usr/share/fh8626/sensor_gc1054_mipi.bin` or `gc1054_day.bin`. The full 0xa58 day payload is not reconstructed in this repository yet, so this remains an explicit profile-data blocker rather than being hidden inside the sensor blocker.
+
 ## Runtime reconfiguration boundary
 
 Cold-start H.264 configuration is implemented. Live `/api/mp4` reconfiguration is deliberately rejected on FH8626V100 until the same-boot stop/reconfigure/restart transaction is hardware-accepted. This prevents the platform from falling through the generic channel lifecycle, which does not own FH8626 resources.

@@ -1,4 +1,5 @@
 #include "server.h"
+#include "hal/full/fh8626_audio.h"
 
 #define HTTP_MAX_CLIENTS 50
 #define HTTP_MIN_BUF_SIZE 4096
@@ -1530,12 +1531,13 @@ void respond_request(http_request_t *req) {
             }
             snprintf(media_json, sizeof(media_json),
                 "{\"backend\":\"%s\",\"native_active\":%s,\"production_ready\":%s,"
-                "\"blockers\":%u,\"channels_total\":%u,\"channels_enabled\":%u,"
+                "\"audio_capture\":%s,\"blockers\":%u,\"channels_total\":%u,\"channels_enabled\":%u,"
                 "\"channels_mainloop\":%u,\"encoders\":{\"h264\":%u,\"h265\":%u,"
                 "\"jpeg\":%u,\"mjpeg\":%u}}",
                 provider.name ? provider.name : "unknown",
                 fh8626_native_active() ? "true" : "false",
-                provider.production ? "true" : "false", provider.blockers,
+                provider.production ? "true" : "false",
+                fh8626_audio_running() ? "true" : "false", provider.blockers,
                 (unsigned int)(unsigned char)chnCount, enabled_channels,
                 main_channels, h264_channels, h265_channels, jpeg_channels,
                 mjpeg_channels);

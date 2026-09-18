@@ -48,6 +48,7 @@ The native source now:
 The provider is intentionally not production-ready. Its blocker mask describes actual remaining work:
 
 - vendor GC1054/MIPI plug-in dependency;
+- external complete GC1054 day SREG profile data;
 - native RTX audio target acceptance;
 - complete runtime video-reconfigure transaction;
 - same-boot teardown/restart acceptance;

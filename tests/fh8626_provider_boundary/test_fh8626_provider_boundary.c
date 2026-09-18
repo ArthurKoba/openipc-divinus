@@ -25,6 +25,7 @@ int main(int argc, char **argv)
         assert(!strcmp(status.name, "kernel"));
         assert(status.blockers == FH8626_KERNEL_BLOCKERS);
         assert(status.blockers & FH8626_BLOCKER_SENSOR_VENDOR_PLUGIN);
+        assert(status.blockers & FH8626_BLOCKER_ISP_PROFILE_DATA);
         assert(status.blockers & FH8626_BLOCKER_AUDIO_HARDWARE_ACCEPTANCE);
         assert(status.blockers & FH8626_BLOCKER_RUNTIME_RECONFIG);
         assert(status.blockers & FH8626_BLOCKER_SAME_BOOT_TEARDOWN);
