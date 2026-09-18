@@ -927,12 +927,14 @@ static int kernel_video_create(void *opaque)
         goto fail;
     }
     k->pae_channel_initialized = 1;
-    /* FH_PAE_CFG field0c is the encoder's fixed input quantum, not GOP.
-     * The recovered fixed FH8626 contract uses H.264 Baseline (profile id 66).
-     * Divinus rejects non-baseline/non-25-GOP requests at the HAL boundary
-     * instead of carrying ignored profile/GOP fields into this backend. */
+    /*
+     * Apollo SetChnAttr public word2 is the GOP/key interval and is copied to
+     * PAE config word3 (channel-state +0x58). enc.ko:pae_pre_enc_proc compares
+     * its GOP-local picture index against this value and resets to the IDR
+     * path when the interval is reached.
+     */
     config = (struct fh8626_pae_cfg){0, k->config.width, k->config.height,
-                                     50, k->config.profile, 28,
+                                     k->config.gop, k->config.profile, 28,
                                      fh8626_fps_packed(k->config.fps),
                                      0, 0, 0, 0};
     if (call_ioctl(k->pae_fd, FH8626_PAE_SET_CONFIG, &config)) {

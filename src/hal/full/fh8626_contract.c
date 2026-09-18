@@ -132,8 +132,9 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
         return 0;
     if (config->codec != HAL_VIDCODEC_H264)
         return 0;
-    if (config->framerate < 1u || config->framerate > 30u ||
-        config->gop != 25u)
+    if (config->framerate < 1u || config->framerate > 30u)
+        return 0;
+    if (!config->gop)
         return 0;
     if (config->profile != HAL_VIDPROFILE_BASELINE &&
         config->profile != HAL_VIDPROFILE_MAIN)
