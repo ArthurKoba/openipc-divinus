@@ -37,6 +37,7 @@ int fh_sensor_gc1054_set_mirror_flip(struct fh_sensor_gc1054 *s,
     uint32_t logical);
 int fh_sensor_gc1054_get_mirror_flip(struct fh_sensor_gc1054 *s,
     uint32_t *logical);
+int fh_sensor_gc1054_bayer_for_mirror_flip(uint32_t logical, uint32_t *bayer);
 
 /* Stock GC1054 leaves the optional AWB slots +0x58/+0x5c empty. */
 void fh_sensor_gc1054_awb_gain(void *opaque, uint32_t gain[3]);

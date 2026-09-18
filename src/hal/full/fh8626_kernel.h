@@ -15,6 +15,8 @@ struct fh8626_native_config {
     uint32_t height;
     uint32_t fps;
     uint32_t profile;
+    uint32_t mirror;
+    uint32_t flip;
     uint32_t rc_mode;
     uint32_t bitrate_kbps;
 };

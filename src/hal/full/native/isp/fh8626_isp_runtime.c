@@ -928,6 +928,16 @@ int fh_isp_runtime_apply_format_bits(struct fh_isp_runtime *rt)
     return 0;
 }
 
+int fh_isp_runtime_set_bayer_selector(struct fh_isp_runtime *rt,
+                                      uint32_t selector)
+{
+    if (!rt || selector > 3u)
+        return -EINVAL;
+
+    rt->ctx[0x0d] = (uint8_t)((rt->ctx[0x0d] & ~0x03u) | selector);
+    return fh_isp_runtime_apply_format_bits(rt);
+}
+
 /* C53E0: final core-enable state at the end of C540C. */
 int fh_isp_runtime_finish_core_init(struct fh_isp_runtime *rt)
 {

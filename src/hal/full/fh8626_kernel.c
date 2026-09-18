@@ -541,6 +541,8 @@ static int kernel_hal_init(void *opaque)
     struct fh8626_kernel *k = opaque;
     uint8_t vi_attr[24];
     uint32_t sensor_format;
+    uint32_t mirror_flip;
+    uint32_t bayer;
     void *mapped;
     int rc;
 
@@ -587,6 +589,16 @@ static int kernel_hal_init(void *opaque)
     rc = fh_sensor_gc1054_set_fmt(&k->sensor, sensor_format);
     if (rc)
         return rc;
+
+    mirror_flip = (k->config.mirror ? 2u : 0u) |
+                  (k->config.flip ? 1u : 0u);
+    rc = fh_sensor_gc1054_set_mirror_flip(&k->sensor, mirror_flip);
+    if (rc)
+        return rc;
+    rc = fh_sensor_gc1054_bayer_for_mirror_flip(mirror_flip, &bayer);
+    if (rc)
+        return rc;
+
     /* The validated owner waits for the sensor/MIPI block to settle after
      * Sensor_Init + set-format before reading VI attributes.  Reading the
      * callback immediately is accepted by the library but can leave the
@@ -611,8 +623,17 @@ static int kernel_hal_init(void *opaque)
                                     FH8626_ISP_MMIO_SIZE);
     if (rc)
         return rc;
-    return fh_isp_runtime_apply_vi_attr(&k->isp_runtime, vi_attr,
-                                        sizeof(vi_attr));
+    rc = fh_isp_runtime_apply_vi_attr(&k->isp_runtime, vi_attr,
+                                      sizeof(vi_attr));
+    if (rc)
+        return rc;
+
+    /*
+     * SetMirrorAndflipEx-equivalent ownership: sensor orientation and ISP
+     * Bayer phase must advance together. The shared context is the owner;
+     * apply_format_bits performs the exact masked MMIO publication.
+     */
+    return fh_isp_runtime_set_bayer_selector(&k->isp_runtime, bayer);
 }
 
 static int load_profile(struct fh8626_kernel *k)

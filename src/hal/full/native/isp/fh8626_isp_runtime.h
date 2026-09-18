@@ -155,6 +155,8 @@ int fh_isp_runtime_load_sreg_profile(struct fh_isp_runtime *rt, const void *cont
 int fh_isp_runtime_apply_geometry(struct fh_isp_runtime *rt, unsigned width, unsigned height);
 int fh_isp_runtime_apply_c531c(struct fh_isp_runtime *rt);
 int fh_isp_runtime_apply_format_bits(struct fh_isp_runtime *rt);
+int fh_isp_runtime_set_bayer_selector(struct fh_isp_runtime *rt,
+                                      uint32_t selector);
 int fh_isp_runtime_finish_core_init(struct fh_isp_runtime *rt);
 int fh_isp_runtime_init_proven_subset(struct fh_isp_runtime *rt, unsigned width, unsigned height);
 int fh_isp_runtime_apply_c4998_static_defaults(struct fh_isp_runtime *rt);

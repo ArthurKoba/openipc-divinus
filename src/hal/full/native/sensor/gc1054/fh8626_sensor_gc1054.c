@@ -175,6 +175,16 @@ int fh_sensor_gc1054_get_mirror_flip(struct fh_sensor_gc1054 *s,
     return fh8626_gc1054_source_get_mirror_flip(logical);
 }
 
+int fh_sensor_gc1054_bayer_for_mirror_flip(uint32_t logical, uint32_t *bayer)
+{
+    static const uint8_t normal_map[4] = {0u, 3u, 1u, 2u};
+
+    if (!bayer || logical > 3u)
+        return -EINVAL;
+    *bayer = normal_map[logical];
+    return 0;
+}
+
 void fh_sensor_gc1054_awb_gain(void *opaque, uint32_t gain[3])
 {
     (void)opaque;
