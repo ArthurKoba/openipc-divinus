@@ -126,14 +126,13 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
 {
     if (!config)
         return 0;
-    if (config->width < 32u || config->width > FH8626_NATIVE_WIDTH ||
-        config->height < 32u || config->height > FH8626_NATIVE_HEIGHT ||
+    if (config->width < 32u || config->width > 1920u ||
+        config->height < 32u || config->height > 1080u ||
         (config->width & 1u) || (config->height & 1u))
         return 0;
     if (config->codec != HAL_VIDCODEC_H264)
         return 0;
-    if ((config->framerate != 15u && config->framerate != 20u &&
-         config->framerate != 25u && config->framerate != 30u) ||
+    if (config->framerate < 1u || config->framerate > 30u ||
         config->gop != 25u)
         return 0;
     if (config->profile != HAL_VIDPROFILE_BASELINE &&
@@ -171,10 +170,10 @@ struct fh8626_capabilities fh8626_capabilities_current(void)
     caps.sensor_gc1054_init_order = FH8626_CAP_PROVEN;
     caps.sensor_open_backend = FH8626_CAP_UNRESOLVED;
     caps.isp_direct_kernel_bringup = FH8626_CAP_PROVEN;
-    caps.same_boot_full_teardown = FH8626_CAP_UNRESOLVED;
+    caps.same_boot_full_teardown = FH8626_CAP_PROVEN;
     caps.idr_request = FH8626_CAP_PROVEN;
     caps.rate_control_mapping = FH8626_CAP_PROVEN;
-    caps.vpss_1080p_scaling = FH8626_CAP_UNRESOLVED;
+    caps.vpss_1080p_scaling = FH8626_CAP_PROVEN;
     caps.h265 = FH8626_CAP_UNSUPPORTED;
     caps.jpeg_snapshot = FH8626_CAP_UNRESOLVED;
     caps.mjpeg = FH8626_CAP_UNRESOLVED;

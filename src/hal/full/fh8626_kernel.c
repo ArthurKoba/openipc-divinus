@@ -64,6 +64,7 @@ struct fh8626_kernel {
     fh8626_video_sink sink;
     uint8_t *scratch;
     struct fh8626_native_config config;
+    uint32_t sensor_fps;
     int lock_fd;
     uint64_t pump_errors;
     int last_pump_error;
@@ -529,17 +530,35 @@ static int kernel_control_tick(struct fh8626_kernel *k)
     return rc;
 }
 
+static uint32_t native_sensor_fps(const struct fh8626_kernel *k)
+{
+    uint32_t demand;
+
+    if (!k)
+        return FH8626_NATIVE_FPS;
+    demand = k->config.fps;
+    if (app_config.mjpeg_enable && app_config.mjpeg_fps > demand)
+        demand = app_config.mjpeg_fps;
+
+    /* Stock separates sensor/ISP cadence from public stream cadence. Keep the
+     * exercised 25-fps sensor clock for all <=25-fps outputs and use the
+     * recovered 30-fps GC1054 mode only when a producer actually needs >25. */
+    return demand > 25u ? 30u : 25u;
+}
+
 static int gc1054_format_for_fps(uint32_t fps, uint32_t *format)
 {
     if (!format)
         return -EINVAL;
-    switch (fps) {
-    case 15u: *format = FH8626_GC1054_FORMAT_720P15; return 0;
-    case 20u: *format = FH8626_GC1054_FORMAT_720P20; return 0;
-    case 25u: *format = FH8626_GC1054_FORMAT_720P25; return 0;
-    case 30u: *format = FH8626_GC1054_FORMAT_720P30; return 0;
-    default: return -ENOTSUP;
+    if (fps == 25u) {
+        *format = FH8626_GC1054_FORMAT_720P25;
+        return 0;
     }
+    if (fps == 30u) {
+        *format = FH8626_GC1054_FORMAT_720P30;
+        return 0;
+    }
+    return -ENOTSUP;
 }
 
 static int kernel_hal_init(void *opaque)
@@ -589,7 +608,8 @@ static int kernel_hal_init(void *opaque)
     rc = fh_sensor_gc1054_init(&k->sensor);
     if (rc)
         return rc;
-    rc = gc1054_format_for_fps(k->config.fps, &sensor_format);
+    k->sensor_fps = native_sensor_fps(k);
+    rc = gc1054_format_for_fps(k->sensor_fps, &sensor_format);
     if (rc)
         return rc;
     rc = fh_sensor_gc1054_set_fmt(&k->sensor, sensor_format);
@@ -1025,10 +1045,15 @@ static void *kernel_control_thread(void *opaque)
                 k->last_pump_error = rc;
             }
         }
-        deadline.tv_nsec += 40000000L;
-        if (deadline.tv_nsec >= 1000000000L) {
-            ++deadline.tv_sec;
-            deadline.tv_nsec -= 1000000000L;
+        {
+            uint64_t ns = UINT64_C(1000000000) /
+                (k->sensor_fps ? k->sensor_fps : FH8626_NATIVE_FPS);
+            deadline.tv_sec += (time_t)(ns / UINT64_C(1000000000));
+            deadline.tv_nsec += (long)(ns % UINT64_C(1000000000));
+            if (deadline.tv_nsec >= 1000000000L) {
+                ++deadline.tv_sec;
+                deadline.tv_nsec -= 1000000000L;
+            }
         }
         clock_gettime(CLOCK_MONOTONIC, &now);
         if (deadline.tv_sec < now.tv_sec ||
@@ -1516,7 +1541,11 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
         mjpeg_cfg.mode = mode;
         mjpeg_cfg.width = width;
         mjpeg_cfg.height = height;
-        mjpeg_cfg.src_fps_packed = fh8626_fps_packed(k->config.fps);
+        if (fps > k->sensor_fps) {
+            rc = -ERANGE;
+            goto fail_mem;
+        }
+        mjpeg_cfg.src_fps_packed = fh8626_fps_packed(k->sensor_fps);
         mjpeg_cfg.dst_fps_packed = fh8626_fps_packed(fps);
         mjpeg_cfg.qp = quality;
         if (bitrate > UINT32_MAX / 1000u) {
