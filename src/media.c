@@ -1041,6 +1041,9 @@ int sdk_stop(void) {
     if (plat == HAL_PLATFORM_FH8626) {
         if (audioOn)
             media_audio_disable();
+        /* fh8626_kernel_stop() destroys the hardware JPEG owner, but keep the
+         * generic Divinus module flag coherent across structural restarts too. */
+        jpeg_deinit();
         int ret = fh8626_sdk_stop();
         if (ret)
             HAL_ERROR("media", "FH8626 native SDK shutdown failed with %#x!\n", ret);
