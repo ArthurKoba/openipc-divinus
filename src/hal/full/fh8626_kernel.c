@@ -1007,17 +1007,7 @@ static void *kernel_stream_thread(void *opaque)
             k->adapter.pts_us = (uint64_t)now.tv_sec * 1000000u +
                 (uint64_t)now.tv_nsec / 1000u;
 
-        {
-            unsigned int before = k->adapter.sequence;
-
-            rc = fh8626_native_adapter_pump(&k->adapter, k->sink);
-            if (k->adapter.sequence != before && k->config.gop &&
-                (k->adapter.sequence % k->config.gop) == 0u) {
-                int gop_rc = kernel_force_i(k);
-                if (gop_rc && !rc)
-                    rc = gop_rc;
-            }
-        }
+        rc = fh8626_native_adapter_pump(&k->adapter, k->sink);
         if (rc) {
             k->pump_errors++;
             if (!producer_probe_done && rc == -EIO) {
