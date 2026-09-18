@@ -57,6 +57,7 @@ struct fh8626_kernel {
     int media_bound;
     int pae_started;
     int vpu_enabled;
+    uint32_t vpu_open_mask;
     volatile int running;
     fh8626_video_sink sink;
     uint8_t *scratch;
@@ -743,6 +744,8 @@ static int kernel_pipeline_create(void *opaque)
     return 0;
 }
 
+static int kernel_video_destroy(void *opaque);
+
 static int kernel_video_create(void *opaque)
 {
     struct fh8626_kernel *k = opaque;
@@ -755,10 +758,14 @@ static int kernel_video_create(void *opaque)
 
     if (call_ioctl(k->isp_fd, FH8626_VPU_OPEN_CHN, &channel))
         return -EIO;
+    k->vpu_open_mask |= 1u << 0;
     if (k->vpu_chn_jpeg.phys) {
         channel = 1u;
-        if (call_ioctl(k->isp_fd, FH8626_VPU_OPEN_CHN, &channel))
-            return -EIO;
+        if (call_ioctl(k->isp_fd, FH8626_VPU_OPEN_CHN, &channel)) {
+            rc = -EIO;
+            goto fail;
+        }
+        k->vpu_open_mask |= 1u << 1;
     }
     {
         uint32_t pace[2] = {0u, FH8626_FPS_PACKED};
@@ -768,41 +775,71 @@ static int kernel_video_create(void *opaque)
             readback[0] != pace[0] || readback[1] != pace[1])
             return -EIO;
     }
-    if (call_ioctl(k->isp_fd, FH8626_ISP_START, NULL))
-        return -EIO;
+    if (call_ioctl(k->isp_fd, FH8626_ISP_START, NULL)) {
+        rc = -EIO;
+        goto fail;
+    }
     if (fh_isp_runtime_apply_profile_luts(&k->isp_runtime) ||
-        fh_isp_runtime_tick_proven_subset(&k->isp_runtime))
-        return -EIO;
-    /* This is the owner’s post-start lifecycle edge, distinct from the
-     * pre-VPU clear and the final post-enable clear. */
+        fh_isp_runtime_tick_proven_subset(&k->isp_runtime)) {
+        rc = -EIO;
+        goto fail;
+    }
+
+    /*
+     * Stock VI/VPSS ownership enables the actual VPU channel before VENC
+     * channel creation/start. 0xC004694D consumes the channel id itself;
+     * channel 0 must therefore send payload 0, not a boolean 1.
+     */
+    channel = 0u;
+    rc = call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &channel);
+    if (rc)
+        goto fail;
+    k->vpu_enabled = 1;
+
+    /* Stock clears the producer gate immediately after VPSS Enable. */
     if (k->mmio) {
         k->mmio[0x008u / sizeof(uint32_t)] = 0u;
         __sync_synchronize();
     }
+
+    /* Keep the validated default NR3D state tied to producer enable. */
+    rc = kernel_nr3d_off(k);
+    if (rc)
+        goto fail;
     fh8626_ae_runtime_init_passive(&k->ae_runtime, k->isp_runtime.ctx,
         k->mmio, &k->sensor, NULL, NULL, kernel_ae_timing, k);
     if (fh8626_ae_runtime_enable_observe(&k->ae_runtime, 1) ||
         fh8626_ae_runtime_enable_commit(&k->ae_runtime, 1))
         return -EIO;
-    if (call_ioctl(k->pae_fd, FH8626_PAE_SYS_QUERY, &need))
-        return -EIO;
+    if (call_ioctl(k->pae_fd, FH8626_PAE_SYS_QUERY, &need)) {
+        rc = -EIO;
+        goto fail;
+    }
     rc = alloc_vmm(k, "pae_sys", need, &k->pae_sys);
-    if (rc || call_ioctl(k->pae_fd, FH8626_PAE_SYS_INIT, &k->pae_sys))
-        return rc ? rc : -EIO;
+    if (rc)
+        goto fail;
+    if (call_ioctl(k->pae_fd, FH8626_PAE_SYS_INIT, &k->pae_sys)) {
+        rc = -EIO;
+        goto fail;
+    }
     memset(&query, 0, sizeof(query));
     query.chn = 0;
     query.width = k->config.width;
     query.height = k->config.height;
-    if (call_ioctl(k->pae_fd, FH8626_PAE_ENC_MEM_SIZE, &query))
-        return -EIO;
+    if (call_ioctl(k->pae_fd, FH8626_PAE_ENC_MEM_SIZE, &query)) {
+        rc = -EIO;
+        goto fail;
+    }
     rc = alloc_vmm(k, "pae_enc0", query.size, &k->pae_chn);
     if (rc)
-        return rc;
+        goto fail;
     memory = (struct fh8626_pae_mem){0, k->pae_chn.phys, k->pae_chn.virt,
                                      k->pae_chn.size, k->config.width,
                                      k->config.height, 0};
-    if (call_ioctl(k->pae_fd, FH8626_PAE_ENC_MEM_INIT, &memory))
-        return -EIO;
+    if (call_ioctl(k->pae_fd, FH8626_PAE_ENC_MEM_INIT, &memory)) {
+        rc = -EIO;
+        goto fail;
+    }
     /* FH_PAE_CFG field0c is the encoder's fixed input quantum, not GOP.
      * The recovered fixed FH8626 contract uses H.264 Baseline (profile id 66).
      * Divinus rejects non-baseline/non-25-GOP requests at the HAL boundary
@@ -810,8 +847,10 @@ static int kernel_video_create(void *opaque)
     config = (struct fh8626_pae_cfg){0, k->config.width, k->config.height,
                                      50, 66, 28,
                                      FH8626_OWNER_FPS_PACKED, 0, 0, 0, 0};
-    if (call_ioctl(k->pae_fd, FH8626_PAE_SET_CONFIG, &config))
-        return -EIO;
+    if (call_ioctl(k->pae_fd, FH8626_PAE_SET_CONFIG, &config)) {
+        rc = -EIO;
+        goto fail;
+    }
     memset(&rc_config, 0, sizeof(rc_config));
     rc_config.chn = 0;
     rc_config.rc_mode = k->config.rc_mode;
@@ -827,9 +866,19 @@ static int kernel_video_create(void *opaque)
     rc_config.ip_qp_delta = 3;
     rc_config.max_still_qp = 38;
     if (fh_pae_rc_validate_driver(&rc_config) ||
-        call_ioctl(k->pae_fd, FH_PAE_SET_RC_CONFIG, &rc_config))
-        return -EIO;
+        call_ioctl(k->pae_fd, FH_PAE_SET_RC_CONFIG, &rc_config)) {
+        rc = -EIO;
+        goto fail;
+    }
     return 0;
+
+fail:
+    {
+        int rollback_rc = kernel_video_destroy(k);
+        if (!rc)
+            rc = rollback_rc;
+    }
+    return rc;
 }
 
 static int kernel_stream_thread_running(struct fh8626_kernel *k)
@@ -922,40 +971,22 @@ static int kernel_stream_start(void *opaque)
 {
     struct fh8626_kernel *k = opaque;
     uint32_t bind[2] = {1, 7};
-    uint32_t channel = 0, enable = 1;
+    uint32_t channel = 0;
     int rc;
+
+    /*
+     * Stock VENC startup owns StartRecvPic before SYS BindVpu2Enc.
+     * VPSS/VPU Enable is already owned by kernel_video_create().
+     */
+    rc = call_ioctl(k->pae_fd, FH8626_PAE_ENC_START, &channel);
+    if (rc)
+        return rc;
+    k->pae_started = 1;
 
     rc = call_ioctl(k->media_fd, FH8626_MEDIA_BIND, bind);
     if (rc)
-        return rc;
+        goto fail;
     k->media_bound = 1;
-
-    rc = call_ioctl(k->pae_fd, FH8626_PAE_ENC_START, &channel);
-    if (rc)
-        goto fail;
-    k->pae_started = 1;
-
-    rc = call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &enable);
-    if (rc)
-        goto fail;
-    k->vpu_enabled = 1;
-
-    /* Match the validated owner default: the kernel temporal engine is
-     * explicitly disabled after VPU_ENABLE, then verified through its query
-     * ABI. Runtime NR3D stages remain gated off until a complete re-enable
-     * lifecycle exists. */
-    rc = kernel_nr3d_off(k);
-    if (rc)
-        goto fail;
-
-    /* Canonical owner releases the ISP/VPU producer gate immediately after
-     * VPU_ENABLE. Without this exact write the encoder can be configured and
-     * enabled while MEDIA_STREAM_6 still reports EIO because no AU is
-     * published into the PAE ring. */
-    if (k->mmio) {
-        k->mmio[0x008u / sizeof(uint32_t)] = 0u;
-        __sync_synchronize();
-    }
 
     k->scratch = malloc(FH8626_SCRATCH_SIZE);
     if (!k->scratch) {
@@ -1028,12 +1059,23 @@ static void kernel_quiesce_threads(struct fh8626_kernel *k)
 static int kernel_stage_stop(void *opaque)
 {
     struct fh8626_kernel *k = opaque;
-    uint32_t zero = 0;
+    uint32_t zero = 0u;
     uint32_t source = 1u;
     int first_error = 0;
     int rc;
 
     kernel_quiesce_threads(k);
+
+    /* Reverse stock StartRecvPic -> Bind ownership: unbind first. */
+    if (k->media_bound && k->media_fd >= 0) {
+        rc = call_ioctl(k->media_fd, FH8626_MEDIA_UNBIND_SRC, &source);
+        if (rc) {
+            if (!first_error)
+                first_error = rc;
+        } else {
+            k->media_bound = 0;
+        }
+    }
 
     if (k->pae_started && k->pae_fd >= 0) {
         rc = call_ioctl(k->pae_fd, FH_PAE_STOP_RECV, &zero);
@@ -1045,8 +1087,25 @@ static int kernel_stage_stop(void *opaque)
         }
     }
 
+    return first_error;
+}
+
+static int kernel_video_destroy(void *opaque)
+{
+    struct fh8626_kernel *k = opaque;
+    int first_error = 0;
+    int rc;
+    int channel;
+
+    if (!k)
+        return -EINVAL;
+
+    /*
+     * 0x694E is the distinct no-payload vpu_disable() operation. Never model
+     * disable as VPU_ENABLE with a zero payload.
+     */
     if (k->vpu_enabled && k->isp_fd >= 0) {
-        rc = call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &zero);
+        rc = call_ioctl(k->isp_fd, FH8626_VPU_DISABLE, NULL);
         if (rc) {
             if (!first_error)
                 first_error = rc;
@@ -1055,13 +1114,17 @@ static int kernel_stage_stop(void *opaque)
         }
     }
 
-    if (k->media_bound && k->media_fd >= 0) {
-        rc = call_ioctl(k->media_fd, FH8626_MEDIA_UNBIND_SRC, &source);
+    /* Close configured VPSS channels in reverse open order. */
+    for (channel = 1; channel >= 0; --channel) {
+        uint32_t ch = (uint32_t)channel;
+        if (!(k->vpu_open_mask & (1u << ch)) || k->isp_fd < 0)
+            continue;
+        rc = call_ioctl(k->isp_fd, FH8626_VPU_CLOSE_CHN, &ch);
         if (rc) {
             if (!first_error)
                 first_error = rc;
         } else {
-            k->media_bound = 0;
+            k->vpu_open_mask &= ~(1u << ch);
         }
     }
 
@@ -1475,7 +1538,7 @@ int fh8626_kernel_start(struct fh8626_kernel **out,
     ops = (struct fh8626_native_runtime_ops){
         kernel_hal_init, kernel_system_init, kernel_pipeline_create,
         kernel_video_create, kernel_stream_start, kernel_stage_stop,
-        kernel_noop, kernel_noop, kernel_noop, kernel_noop};
+        kernel_video_destroy, kernel_noop, kernel_noop, kernel_noop};
     rc = fh8626_native_runtime_init(&k->runtime, &ops, k);
     if (!rc)
         rc = fh8626_native_runtime_start(&k->runtime);
