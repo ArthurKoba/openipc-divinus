@@ -126,13 +126,18 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
 {
     if (!config)
         return 0;
-    if (config->width != FH8626_NATIVE_WIDTH || config->height != FH8626_NATIVE_HEIGHT)
+    if (config->width < 32u || config->width > FH8626_NATIVE_WIDTH ||
+        config->height < 32u || config->height > FH8626_NATIVE_HEIGHT ||
+        (config->width & 1u) || (config->height & 1u))
         return 0;
     if (config->codec != HAL_VIDCODEC_H264)
         return 0;
-    if (config->framerate != FH8626_NATIVE_FPS || config->gop != 25u)
+    if ((config->framerate != 15u && config->framerate != 20u &&
+         config->framerate != 25u && config->framerate != 30u) ||
+        config->gop != 25u)
         return 0;
-    if (config->profile != HAL_VIDPROFILE_BASELINE)
+    if (config->profile != HAL_VIDPROFILE_BASELINE &&
+        config->profile != HAL_VIDPROFILE_MAIN)
         return 0;
     if (config->mode != HAL_VIDMODE_CBR &&
         config->mode != HAL_VIDMODE_VBR &&

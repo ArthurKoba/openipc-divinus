@@ -31,9 +31,6 @@
 #define FH8626_ISP_MMIO_PHYS 0xE8400000u
 #define FH8626_ISP_MMIO_SIZE 0x4000u
 #define FH8626_ISP_CFG_SIZE  0x1CE000u
-/* FH wire order is denominator in the high half, numerator in the low
- * half.  For 25 fps this is 0x00010019, not 0x00190001. */
-#define FH8626_FPS_PACKED    ((1u << 16) | 25u)
 #define FH8626_ISP_MASK      0x000FFFFFu
 #define FH8626_SCRATCH_SIZE  (4u * 1024u * 1024u)
 #define FH8626_ISP_NR3D_QUERY 0x80206926UL
@@ -526,10 +523,24 @@ static int kernel_control_tick(struct fh8626_kernel *k)
     return rc;
 }
 
+static int gc1054_format_for_fps(uint32_t fps, uint32_t *format)
+{
+    if (!format)
+        return -EINVAL;
+    switch (fps) {
+    case 15u: *format = FH8626_GC1054_FORMAT_720P15; return 0;
+    case 20u: *format = FH8626_GC1054_FORMAT_720P20; return 0;
+    case 25u: *format = FH8626_GC1054_FORMAT_720P25; return 0;
+    case 30u: *format = FH8626_GC1054_FORMAT_720P30; return 0;
+    default: return -ENOTSUP;
+    }
+}
+
 static int kernel_hal_init(void *opaque)
 {
     struct fh8626_kernel *k = opaque;
     uint8_t vi_attr[24];
+    uint32_t sensor_format;
     void *mapped;
     int rc;
 
@@ -570,7 +581,10 @@ static int kernel_hal_init(void *opaque)
     rc = fh_sensor_gc1054_init(&k->sensor);
     if (rc)
         return rc;
-    rc = fh_sensor_gc1054_set_fmt(&k->sensor, 0x801061A8u);
+    rc = gc1054_format_for_fps(k->config.fps, &sensor_format);
+    if (rc)
+        return rc;
+    rc = fh_sensor_gc1054_set_fmt(&k->sensor, sensor_format);
     if (rc)
         return rc;
     /* The validated owner waits for the sensor/MIPI block to settle after
@@ -621,8 +635,8 @@ static int kernel_system_init(void *opaque)
     uint8_t icfg[92];
     int rc;
 
-    vi[0] = k->config.width;
-    vi[1] = k->config.height;
+    vi[0] = FH8626_NATIVE_WIDTH;
+    vi[1] = FH8626_NATIVE_HEIGHT;
 
     rc = alloc_vmm(k, "isp_cfg", 0x1CE000u, &k->isp_cfg);
     if (rc)
@@ -665,7 +679,7 @@ static int kernel_system_init(void *opaque)
         return rc;
     isp_regs_720p(k->mmio);
     if (fh_isp_runtime_apply_known_stock_init(&k->isp_runtime,
-            k->config.width, k->config.height))
+            FH8626_NATIVE_WIDTH, FH8626_NATIVE_HEIGHT))
         return -EIO;
     fprintf(stderr,
         "[fh8626] init ctx10=%02x ctx11=%02x ctx13=%02x ctx2c=%02x "
@@ -706,10 +720,12 @@ static int kernel_pipeline_create(void *opaque)
     int rc;
 
     request.channel = 0;
-    request.native_width = k->config.width;
-    request.native_height = k->config.height;
+    request.native_width = FH8626_NATIVE_WIDTH;
+    request.native_height = FH8626_NATIVE_HEIGHT;
     request.visible_width = k->config.width;
     request.visible_height = k->config.height;
+    request.capacity_width = k->config.width;
+    request.capacity_height = k->config.height;
     request.coefficient = FHG_COEFF_INHERIT;
     context = (struct fhg_linux_context){k->isp_fd, k, geometry_enter,
                                          geometry_leave};
@@ -782,7 +798,7 @@ static int kernel_video_create(void *opaque)
         k->vpu_open_mask |= 1u << 1;
     }
     {
-        uint32_t pace[2] = {0u, FH8626_FPS_PACKED};
+        uint32_t pace[2] = {0u, fh8626_fps_packed(k->config.fps)};
         uint32_t readback[2] = {0u, 0u};
         if (call_ioctl(k->isp_fd, FH8626_VPU_SET_FRAMECTRL, pace) ||
             call_ioctl(k->isp_fd, FH8626_VPU_GET_FRAMECTRL, readback) ||
@@ -863,8 +879,9 @@ static int kernel_video_create(void *opaque)
      * Divinus rejects non-baseline/non-25-GOP requests at the HAL boundary
      * instead of carrying ignored profile/GOP fields into this backend. */
     config = (struct fh8626_pae_cfg){0, k->config.width, k->config.height,
-                                     50, 66, 28,
-                                     FH8626_OWNER_FPS_PACKED, 0, 0, 0, 0};
+                                     50, k->config.profile, 28,
+                                     fh8626_fps_packed(k->config.fps),
+                                     0, 0, 0, 0};
     if (call_ioctl(k->pae_fd, FH8626_PAE_SET_CONFIG, &config)) {
         rc = -EIO;
         goto fail;
@@ -872,7 +889,7 @@ static int kernel_video_create(void *opaque)
     memset(&rc_config, 0, sizeof(rc_config));
     rc_config.chn = 0;
     rc_config.rc_mode = k->config.rc_mode;
-    rc_config.frame_rate_packed = FH8626_OWNER_FPS_PACKED;
+    rc_config.frame_rate_packed = fh8626_fps_packed(k->config.fps);
     rc_config.init_qp = 38;
     if (k->config.bitrate_kbps > UINT32_MAX / 1000u) {
         rc = -ERANGE;
@@ -1019,7 +1036,8 @@ static int kernel_stream_start(void *opaque)
     if (rc)
         goto fail;
     rc = fh8626_native_adapter_init(&k->adapter, &k->stream, k->scratch,
-        FH8626_SCRATCH_SIZE, kernel_copy, k, 40000);
+        FH8626_SCRATCH_SIZE, kernel_copy, k,
+        fh8626_frame_interval_us(k->config.fps));
     if (rc)
         goto fail;
 
