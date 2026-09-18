@@ -974,6 +974,15 @@ static int kernel_video_create(void *opaque)
         rc_config.still_rate_percent = 30; rc_config.max_rate_percent = 120;
         rc_config.ip_qp_delta = 3;
         rc_config.max_still_qp = 38;
+        if (k->config.rc_mode == FH_PAE_RC_CVBR) {
+            if (k->config.secondary_bitrate_kbps > UINT32_MAX / 1000u) {
+                rc = -ERANGE;
+                goto fail;
+            }
+            rc_config.additional_rate_bits =
+                k->config.secondary_bitrate_kbps * 1000u;
+            rc_config.extra_qp_parameter = k->config.extra_qp;
+        }
     }
     if (fh_pae_rc_validate_driver(&rc_config) ||
         call_ioctl(k->pae_fd, FH_PAE_SET_RC_CONFIG, &rc_config)) {

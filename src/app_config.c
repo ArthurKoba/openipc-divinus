@@ -170,6 +170,8 @@ int app_config_save(void) {
     fprintf(file, "  bitrate: %d\n", app_config.mp4_bitrate);
     fprintf(file, "  iqp: %d\n", app_config.mp4_iqp);
     fprintf(file, "  pqp: %d\n", app_config.mp4_pqp);
+    fprintf(file, "  secondary_bitrate: %d\n", app_config.mp4_secondary_bitrate);
+    fprintf(file, "  extra_qp: %d\n", app_config.mp4_extra_qp);
 
     fprintf(file, "osd:\n");
     fprintf(file, "  enable: %s\n", app_config.osd_enable ? "true" : "false");
@@ -269,6 +271,8 @@ enum ConfigError app_config_parse(void) {
     app_config.mp4_enable = false;
     app_config.mp4_iqp = 28;
     app_config.mp4_pqp = 30;
+    app_config.mp4_secondary_bitrate = 512;
+    app_config.mp4_extra_qp = 0;
 
     app_config.mjpeg_enable = false;
     app_config.mjpeg_fps = 15;
@@ -485,7 +489,7 @@ enum ConfigError app_config_parse(void) {
                 app_config.mp4_codecH265 = false;
         }
         {
-            const char *possible_values[] = {"CBR", "VBR", "QP", "ABR", "AVBR"};
+            const char *possible_values[] = {"CBR", "VBR", "QP", "ABR", "AVBR", "CVBR"};
             const int count = sizeof(possible_values) / sizeof(const char *);
             int val = 0;
             parse_enum(&ini, "mp4", "mode", (void *)&val,
@@ -525,6 +529,9 @@ enum ConfigError app_config_parse(void) {
             goto RET_ERR;
         parse_int(&ini, "mp4", "iqp", 0, 51, &app_config.mp4_iqp);
         parse_int(&ini, "mp4", "pqp", 0, 51, &app_config.mp4_pqp);
+        parse_int(&ini, "mp4", "secondary_bitrate", 1, INT_MAX,
+            &app_config.mp4_secondary_bitrate);
+        parse_int(&ini, "mp4", "extra_qp", 0, 51, &app_config.mp4_extra_qp);
     }
 
     err = parse_bool(&ini, "jpeg", "enable", &app_config.jpeg_enable);

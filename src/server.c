@@ -1401,6 +1401,14 @@ void respond_request(http_request_t *req) {
                     short result = strtol(value, &remain, 10);
                     if (remain != value && result >= 0 && result <= 51)
                         app_config.mp4_pqp = (unsigned int)result;
+                } else if (EQUALS(key, "secondary_bitrate")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result > 0)
+                        app_config.mp4_secondary_bitrate = (unsigned int)result;
+                } else if (EQUALS(key, "extra_qp")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result >= 0 && result <= 51)
+                        app_config.mp4_extra_qp = (unsigned int)result;
                 } else if (EQUALS(key, "h265")) {
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
                         app_config.mp4_codecH265 = 1;
@@ -1417,6 +1425,8 @@ void respond_request(http_request_t *req) {
                         app_config.mp4_mode = HAL_VIDMODE_ABR;
                     else if (EQUALS_CASE(value, "AVBR"))
                         app_config.mp4_mode = HAL_VIDMODE_AVBR;
+                    else if (EQUALS_CASE(value, "CVBR"))
+                        app_config.mp4_mode = HAL_VIDMODE_CVBR;
                 } else if (EQUALS(key, "profile")) {
                     if (EQUALS_CASE(value, "BP") || EQUALS_CASE(value, "BASELINE"))
                         app_config.mp4_profile = HAL_VIDPROFILE_BASELINE;
@@ -1443,6 +1453,7 @@ void respond_request(http_request_t *req) {
                 case HAL_VIDMODE_QP: strcpy(mode, "QP"); break;
                 case HAL_VIDMODE_ABR: strcpy(mode, "ABR"); break;
                 case HAL_VIDMODE_AVBR: strcpy(mode, "AVBR"); break;
+                case HAL_VIDMODE_CVBR: strcpy(mode, "CVBR"); break;
             }
             switch (app_config.mp4_profile) {
                 case HAL_VIDPROFILE_BASELINE: strcpy(profile, "BP"); break;
@@ -1456,11 +1467,12 @@ void respond_request(http_request_t *req) {
                 "\r\n"
                 "{\"enable\":%s,\"width\":%d,\"height\":%d,\"fps\":%d,\"gop\":%d,"
                 "\"h265\":%s,\"mode\":\"%s\",\"profile\":\"%s\",\"bitrate\":%d,"
-                "\"iqp\":%d,\"pqp\":%d}",
+                "\"iqp\":%d,\"pqp\":%d,\"secondary_bitrate\":%d,\"extra_qp\":%d}",
                 app_config.mp4_enable ? "true" : "false",
                 app_config.mp4_width, app_config.mp4_height,
                 app_config.mp4_fps, app_config.mp4_gop, h265, mode, profile,
-                app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp);
+                app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp,
+                app_config.mp4_secondary_bitrate, app_config.mp4_extra_qp);
             send_and_close(req->clntFd, response, respLen);
         }
         return;

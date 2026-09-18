@@ -22,6 +22,8 @@ struct fh8626_native_config {
     uint32_t bitrate_kbps;
     uint32_t i_qp;
     uint32_t p_qp;
+    uint32_t secondary_bitrate_kbps;
+    uint32_t extra_qp;
 };
 
 int fh8626_kernel_start(struct fh8626_kernel **out,

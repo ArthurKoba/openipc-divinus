@@ -230,8 +230,10 @@ int fh8626_sdk_start(fh8626_video_sink sink)
         app_config.mp4_mode == HAL_VIDMODE_VBR ? FH_PAE_RC_VBR :
         app_config.mp4_mode == HAL_VIDMODE_QP ? FH_PAE_RC_FIXED_QP :
         app_config.mp4_mode == HAL_VIDMODE_AVBR ? FH_PAE_RC_AVBR :
+        app_config.mp4_mode == HAL_VIDMODE_CVBR ? FH_PAE_RC_CVBR :
         FH_PAE_RC_CBR,
-        app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp};
+        app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp,
+        app_config.mp4_secondary_bitrate, app_config.mp4_extra_qp};
     {
         int native_ret = fh8626_kernel_start(&kernel_context, &config, sink);
         if (!native_ret) {

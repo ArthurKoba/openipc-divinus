@@ -46,6 +46,7 @@ typedef enum {
     HAL_VIDMODE_QP,
     HAL_VIDMODE_ABR,
     HAL_VIDMODE_AVBR,
+    HAL_VIDMODE_CVBR,
     HAL_VIDMODE_END
 } hal_vidmode;
 

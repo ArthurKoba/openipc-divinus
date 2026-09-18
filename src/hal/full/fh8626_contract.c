@@ -143,7 +143,8 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
     if (config->mode != HAL_VIDMODE_CBR &&
         config->mode != HAL_VIDMODE_VBR &&
         config->mode != HAL_VIDMODE_QP &&
-        config->mode != HAL_VIDMODE_AVBR)
+        config->mode != HAL_VIDMODE_AVBR &&
+        config->mode != HAL_VIDMODE_CVBR)
         return 0;
     if (config->mode == HAL_VIDMODE_QP) {
         if (config->minQual > FH_PAE_MAX_QP || config->maxQual > FH_PAE_MAX_QP)
