@@ -122,13 +122,16 @@ void fh_sensor_gc1054_close(struct fh_sensor_gc1054 *s)
 {
     if (!s)
         return;
-    /* Do not call Sensor_Destory here in the live media owner yet.  The vendor
-     * driver teardown lifetime is known to be fragile.  Process-lifetime owner
-     * keeps the library loaded. */
+
+    /* The exact vendor Sensor_Destory/MIPI teardown lifetime is not recovered.
+     * The supported Divinus lifecycle is process lifetime: media stop is
+     * followed by exec/exit, while live FH8626 reconfiguration is rejected.
+     * Do not run ELF destructors or unmap executable vendor code through
+     * dlclose() while callbacks may have left opaque driver state behind.
+     * The process image releases both mappings on exec/exit. */
     s->cb = NULL;
-    if (s->dl_sensor) dlclose(s->dl_sensor);
-    if (s->dl_mipi) dlclose(s->dl_mipi);
-    memset(s, 0, sizeof(*s));
+    s->dl_sensor = NULL;
+    s->dl_mipi = NULL;
 }
 
 int fh_sensor_gc1054_init(struct fh_sensor_gc1054 *s)
