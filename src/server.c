@@ -89,6 +89,20 @@ static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
 
 static void fh8626_api_video_disconnect_clients(void);
 
+static int fh8626_api_restore_runtime_state(void)
+{
+    int rc;
+
+    if (night_grayscale_on()) {
+        rc = fh8626_set_grayscale(1);
+        if (rc)
+            return rc;
+    }
+    region_invalidate_all();
+    media_capture_discontinuity();
+    return 0;
+}
+
 static int fh8626_api_video_restart(const struct fh8626_api_video_cfg *next,
     const struct fh8626_api_video_cfg *old)
 {
@@ -104,16 +118,26 @@ static int fh8626_api_video_restart(const struct fh8626_api_video_cfg *next,
     }
 
     rc = sdk_start();
-    if (rc == EXIT_SUCCESS) {
-        media_capture_discontinuity();
+    if (rc == EXIT_SUCCESS)
+        rc = fh8626_api_restore_runtime_state();
+    else
+        rc = -EIO;
+    if (!rc)
         return 0;
-    }
+
+    /* A new owner may have started but failed to restore persistent media
+     * state (for example active night grayscale). Tear it down before
+     * rebuilding the previous configuration. */
+    if (fh8626_native_active() && sdk_stop() != EXIT_SUCCESS)
+        return -EUCLEAN;
 
     fh8626_api_video_to_app(old);
     rollback_rc = sdk_start();
     if (rollback_rc != EXIT_SUCCESS)
         return -EUCLEAN;
-    media_capture_discontinuity();
+    rollback_rc = fh8626_api_restore_runtime_state();
+    if (rollback_rc)
+        return -EUCLEAN;
     return -EIO;
 }
 

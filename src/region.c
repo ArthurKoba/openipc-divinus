@@ -596,3 +596,13 @@ int region_start() {
 void region_stop() {
     pthread_join(regionPid, NULL);
 }
+
+void region_invalidate_all(void)
+{
+    char id;
+
+    for (id = 0; id < MAX_OSD; ++id) {
+        if (!EMPTY(osds[id].text) || !EMPTY(osds[id].img))
+            osds[id].updt = 1;
+    }
+}

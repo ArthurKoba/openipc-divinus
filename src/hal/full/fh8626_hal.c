@@ -29,6 +29,7 @@ static struct fh8626_osd_request fh8626_osd_request[FH8626_OSD_HW_SLOTS];
 
 #ifdef FH8626_NATIVE_KERNEL
 static struct fh8626_kernel *kernel_context;
+static pthread_mutex_t kernel_context_lock = PTHREAD_MUTEX_INITIALIZER;
 #endif
 
 #ifdef FH8626_NATIVE_STUB
@@ -207,8 +208,6 @@ int fh8626_sdk_start(fh8626_video_sink sink)
     struct fh8626_native_config config;
     hal_vidconfig requested;
 
-    if (kernel_context)
-        return -EBUSY;
     memset(fh8626_osd_request, 0, sizeof(fh8626_osd_request));
     if (app_config.mp4_width > UINT16_MAX ||
         app_config.mp4_height > UINT16_MAX ||
@@ -243,7 +242,14 @@ int fh8626_sdk_start(fh8626_video_sink sink)
         app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp,
         app_config.mp4_secondary_bitrate, app_config.mp4_extra_qp};
     {
-        int native_ret = fh8626_kernel_start(&kernel_context, &config, sink);
+        int native_ret;
+
+        pthread_mutex_lock(&kernel_context_lock);
+        if (kernel_context) {
+            pthread_mutex_unlock(&kernel_context_lock);
+            return -EBUSY;
+        }
+        native_ret = fh8626_kernel_start(&kernel_context, &config, sink);
         if (!native_ret) {
             memset(fh8626_state, 0, sizeof(fh8626_state));
             fh8626_state[0].enable = 1;
@@ -251,6 +257,7 @@ int fh8626_sdk_start(fh8626_video_sink sink)
             fh8626_state[0].payload = HAL_VIDCODEC_H264;
             strcpy(sensor, "GC1054");
         }
+        pthread_mutex_unlock(&kernel_context_lock);
         return native_ret;
     }
 #endif
@@ -325,7 +332,11 @@ fail:
 int fh8626_native_active(void)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    return kernel_context != NULL;
+    int active;
+    pthread_mutex_lock(&kernel_context_lock);
+    active = kernel_context != NULL;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return active;
 #elif defined(FH8626_NATIVE_STUB)
     return stub.lock_ready && stub.running;
 #else
@@ -336,9 +347,11 @@ int fh8626_native_active(void)
 int fh8626_request_idr(void)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    if (!kernel_context)
-        return -ENODEV;
-    return fh8626_kernel_request_idr(kernel_context);
+    int rc;
+    pthread_mutex_lock(&kernel_context_lock);
+    rc = kernel_context ? fh8626_kernel_request_idr(kernel_context) : -ENODEV;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
 #else
     return -ENOTSUP;
 #endif
@@ -347,9 +360,12 @@ int fh8626_request_idr(void)
 int fh8626_set_bitrate(uint32_t bitrate_kbps)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    if (!kernel_context)
-        return -ENODEV;
-    return fh8626_kernel_set_bitrate(kernel_context, bitrate_kbps);
+    int rc;
+    pthread_mutex_lock(&kernel_context_lock);
+    rc = kernel_context ?
+        fh8626_kernel_set_bitrate(kernel_context, bitrate_kbps) : -ENODEV;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
 #else
     (void)bitrate_kbps;
     return -ENOTSUP;
@@ -359,9 +375,12 @@ int fh8626_set_bitrate(uint32_t bitrate_kbps)
 int fh8626_set_mirror_flip(int mirror, int flip)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    if (!kernel_context)
-        return -ENODEV;
-    return fh8626_kernel_set_mirror_flip(kernel_context, mirror, flip);
+    int rc;
+    pthread_mutex_lock(&kernel_context_lock);
+    rc = kernel_context ?
+        fh8626_kernel_set_mirror_flip(kernel_context, mirror, flip) : -ENODEV;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
 #else
     (void)mirror;
     (void)flip;
@@ -372,9 +391,12 @@ int fh8626_set_mirror_flip(int mirror, int flip)
 int fh8626_set_grayscale(int enabled)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    if (!kernel_context)
-        return -ENODEV;
-    return fh8626_kernel_set_grayscale(kernel_context, enabled);
+    int rc;
+    pthread_mutex_lock(&kernel_context_lock);
+    rc = kernel_context ?
+        fh8626_kernel_set_grayscale(kernel_context, enabled) : -ENODEV;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
 #else
     (void)enabled;
     return -ENOTSUP;
@@ -385,10 +407,13 @@ int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
     uint32_t quality, uint32_t fps, uint32_t bitrate, uint32_t rc_mode)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    if (!kernel_context)
-        return -ENODEV;
-    return fh8626_kernel_jpeg_init(kernel_context, mode, width, height,
-        quality, fps, bitrate, rc_mode);
+    int rc;
+    pthread_mutex_lock(&kernel_context_lock);
+    rc = kernel_context ?
+        fh8626_kernel_jpeg_init(kernel_context, mode, width, height,
+            quality, fps, bitrate, rc_mode) : -ENODEV;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
 #else
     (void)mode; (void)width; (void)height; (void)quality;
     (void)fps; (void)bitrate; (void)rc_mode;
@@ -399,16 +424,20 @@ int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
 void fh8626_jpeg_deinit(void)
 {
 #ifdef FH8626_NATIVE_KERNEL
+    pthread_mutex_lock(&kernel_context_lock);
     if (kernel_context)
         (void)fh8626_kernel_jpeg_deinit(kernel_context);
+    pthread_mutex_unlock(&kernel_context_lock);
 #endif
 }
 
 void fh8626_jpeg_deinit_mode(uint32_t mode)
 {
 #ifdef FH8626_NATIVE_KERNEL
+    pthread_mutex_lock(&kernel_context_lock);
     if (kernel_context)
         (void)fh8626_kernel_jpeg_deinit_mode(kernel_context, mode);
+    pthread_mutex_unlock(&kernel_context_lock);
 #else
     (void)mode;
 #endif
@@ -418,10 +447,13 @@ int fh8626_jpeg_get(uint32_t width, uint32_t height, uint32_t quality,
     hal_jpegdata *jpeg)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    if (!kernel_context)
-        return -ENODEV;
-    return fh8626_kernel_jpeg_get(kernel_context, width, height, quality,
-        jpeg);
+    int rc;
+    pthread_mutex_lock(&kernel_context_lock);
+    rc = kernel_context ?
+        fh8626_kernel_jpeg_get(kernel_context, width, height, quality, jpeg) :
+        -ENODEV;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
 #else
     (void)width; (void)height; (void)quality; (void)jpeg;
     return -ENOTSUP;
@@ -450,16 +482,21 @@ int fh8626_hal_stub_get_stats(struct fh8626_stub_stats *stats)
 int fh8626_sdk_stop(void)
 {
 #ifdef FH8626_NATIVE_KERNEL
+    pthread_mutex_lock(&kernel_context_lock);
     if (kernel_context) {
         int native_ret = fh8626_kernel_stop(kernel_context);
         /* -EBUSY means the owner context was deliberately retained rather than
          * freeing resources under an outstanding stream lease. */
-        if (native_ret == -EBUSY)
+        if (native_ret == -EBUSY) {
+            pthread_mutex_unlock(&kernel_context_lock);
             return native_ret;
+        }
         kernel_context = NULL;
         memset(fh8626_state, 0, sizeof(fh8626_state));
+        pthread_mutex_unlock(&kernel_context_lock);
         return native_ret;
     }
+    pthread_mutex_unlock(&kernel_context_lock);
 #endif
 #ifndef FH8626_NATIVE_STUB
     return -ENOTSUP;
@@ -488,9 +525,11 @@ int fh8626_region_create(unsigned id, hal_rect rect, uint8_t opacity)
         return -ENOTSUP;
     if (!rect.width || !rect.height)
         return -EINVAL;
+    pthread_mutex_lock(&kernel_context_lock);
     fh8626_osd_request[id].rect = rect;
     fh8626_osd_request[id].opacity = opacity;
     fh8626_osd_request[id].ready = 1;
+    pthread_mutex_unlock(&kernel_context_lock);
     return 0;
 #else
     (void)id; (void)rect; (void)opacity;
@@ -501,15 +540,20 @@ int fh8626_region_create(unsigned id, hal_rect rect, uint8_t opacity)
 int fh8626_region_setbitmap(unsigned id, const hal_bitmap *bitmap)
 {
 #ifdef FH8626_NATIVE_KERNEL
-    if (!kernel_context)
-        return -ENODEV;
+    int rc;
     if (id >= FH8626_OSD_HW_SLOTS)
         return -ENOTSUP;
-    if (!fh8626_osd_request[id].ready)
-        return -EINVAL;
-    return fh8626_kernel_osd_set(kernel_context, id,
-        &fh8626_osd_request[id].rect, fh8626_osd_request[id].opacity,
-        bitmap);
+    pthread_mutex_lock(&kernel_context_lock);
+    if (!kernel_context)
+        rc = -ENODEV;
+    else if (!fh8626_osd_request[id].ready)
+        rc = -EINVAL;
+    else
+        rc = fh8626_kernel_osd_set(kernel_context, id,
+            &fh8626_osd_request[id].rect, fh8626_osd_request[id].opacity,
+            bitmap);
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
 #else
     (void)id; (void)bitmap;
     return -ENOTSUP;
@@ -523,10 +567,10 @@ int fh8626_region_destroy(unsigned id)
 
     if (id >= FH8626_OSD_HW_SLOTS)
         return -ENOTSUP;
+    pthread_mutex_lock(&kernel_context_lock);
     memset(&fh8626_osd_request[id], 0, sizeof(fh8626_osd_request[id]));
-    if (!kernel_context)
-        return 0;
-    rc = fh8626_kernel_osd_destroy(kernel_context, id);
+    rc = kernel_context ? fh8626_kernel_osd_destroy(kernel_context, id) : 0;
+    pthread_mutex_unlock(&kernel_context_lock);
     return rc;
 #else
     (void)id;

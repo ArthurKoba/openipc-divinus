@@ -75,3 +75,4 @@ extern char timefmt[64];
 
 int region_start(void);
 void region_stop(void);
+void region_invalidate_all(void);
