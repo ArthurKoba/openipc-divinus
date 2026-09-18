@@ -54,6 +54,9 @@ struct fh8626_kernel {
     pthread_t control_thread;
     int thread_started;
     int control_thread_started;
+    int media_bound;
+    int pae_started;
+    int vpu_enabled;
     volatile int running;
     fh8626_video_sink sink;
     uint8_t *scratch;
@@ -913,6 +916,8 @@ static void *kernel_control_thread(void *opaque)
     return NULL;
 }
 
+static int kernel_stage_stop(void *opaque);
+
 static int kernel_stream_start(void *opaque)
 {
     struct fh8626_kernel *k = opaque;
@@ -920,17 +925,29 @@ static int kernel_stream_start(void *opaque)
     uint32_t channel = 0, enable = 1;
     int rc;
 
-    if (call_ioctl(k->media_fd, FH8626_MEDIA_BIND, bind) ||
-        call_ioctl(k->pae_fd, FH8626_PAE_ENC_START, &channel) ||
-        call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &enable))
-        return -EIO;
+    rc = call_ioctl(k->media_fd, FH8626_MEDIA_BIND, bind);
+    if (rc)
+        return rc;
+    k->media_bound = 1;
+
+    rc = call_ioctl(k->pae_fd, FH8626_PAE_ENC_START, &channel);
+    if (rc)
+        goto fail;
+    k->pae_started = 1;
+
+    rc = call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &enable);
+    if (rc)
+        goto fail;
+    k->vpu_enabled = 1;
+
     /* Match the validated owner default: the kernel temporal engine is
      * explicitly disabled after VPU_ENABLE, then verified through its query
      * ABI. Runtime NR3D stages remain gated off until a complete re-enable
      * lifecycle exists. */
     rc = kernel_nr3d_off(k);
     if (rc)
-        return rc;
+        goto fail;
+
     /* Canonical owner releases the ISP/VPU producer gate immediately after
      * VPU_ENABLE. Without this exact write the encoder can be configured and
      * enabled while MEDIA_STREAM_6 still reports EIO because no AU is
@@ -939,18 +956,22 @@ static int kernel_stream_start(void *opaque)
         k->mmio[0x008u / sizeof(uint32_t)] = 0u;
         __sync_synchronize();
     }
+
     k->scratch = malloc(FH8626_SCRATCH_SIZE);
-    if (!k->scratch)
-        return -ENOMEM;
+    if (!k->scratch) {
+        rc = -ENOMEM;
+        goto fail;
+    }
     rc = fh8626_stream_backend_init(&k->stream, k->media_fd, k->pae_fd,
         k->pae_sys.virt, k->pae_sys.size, kernel_ioctl_adapter, k,
         &k->runtime.life);
     if (rc)
-        return rc;
+        goto fail;
     rc = fh8626_native_adapter_init(&k->adapter, &k->stream, k->scratch,
         FH8626_SCRATCH_SIZE, kernel_copy, k, 40000);
     if (rc)
-        return rc;
+        goto fail;
+
     /* Owner's run transition acknowledges pending ISP status and then
      * enables the producer interrupt mask. Leaving 0x008 cleared keeps the
      * VPU enabled but prevents any frame from reaching the PAE ring. */
@@ -961,22 +982,31 @@ static int kernel_stream_start(void *opaque)
         k->mmio[0x008u / sizeof(uint32_t)] = FH8626_ISP_MASK;
         __sync_synchronize();
     }
+
     k->running = 1;
     rc = pthread_create(&k->thread, NULL, kernel_stream_thread, k);
     if (rc) {
         k->running = 0;
-        return -rc;
+        rc = -rc;
+        goto fail;
     }
     k->thread_started = 1;
+
     rc = pthread_create(&k->control_thread, NULL, kernel_control_thread, k);
     if (rc) {
-        k->running = 0;
-        pthread_join(k->thread, NULL);
-        k->thread_started = 0;
-        return -rc;
+        rc = -rc;
+        goto fail;
     }
     k->control_thread_started = 1;
     return 0;
+
+fail:
+    {
+        int stop_rc = kernel_stage_stop(k);
+        if (!rc)
+            rc = stop_rc;
+    }
+    return rc;
 }
 
 static void kernel_quiesce_threads(struct fh8626_kernel *k)
@@ -999,20 +1029,42 @@ static int kernel_stage_stop(void *opaque)
 {
     struct fh8626_kernel *k = opaque;
     uint32_t zero = 0;
+    uint32_t source = 1u;
     int first_error = 0;
     int rc;
 
     kernel_quiesce_threads(k);
-    if (k->pae_fd >= 0) {
+
+    if (k->pae_started && k->pae_fd >= 0) {
         rc = call_ioctl(k->pae_fd, FH_PAE_STOP_RECV, &zero);
-        if (rc && !first_error)
-            first_error = rc;
+        if (rc) {
+            if (!first_error)
+                first_error = rc;
+        } else {
+            k->pae_started = 0;
+        }
     }
-    if (k->isp_fd >= 0) {
+
+    if (k->vpu_enabled && k->isp_fd >= 0) {
         rc = call_ioctl(k->isp_fd, FH8626_VPU_ENABLE, &zero);
-        if (rc && !first_error)
-            first_error = rc;
+        if (rc) {
+            if (!first_error)
+                first_error = rc;
+        } else {
+            k->vpu_enabled = 0;
+        }
     }
+
+    if (k->media_bound && k->media_fd >= 0) {
+        rc = call_ioctl(k->media_fd, FH8626_MEDIA_UNBIND_SRC, &source);
+        if (rc) {
+            if (!first_error)
+                first_error = rc;
+        } else {
+            k->media_bound = 0;
+        }
+    }
+
     return first_error;
 }
 

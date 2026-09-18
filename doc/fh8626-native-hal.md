@@ -23,7 +23,7 @@ The current source contains the recovered native contracts for:
 - force-IDR through the recovered `FH_PAE_FORCE_I` operation;
 - JPEG/MJPEG source implementation;
 - RTX audio transport contract;
-- best-effort teardown semantics;
+- best-effort teardown semantics with explicit H.264 bind/start/enable ownership tracking and source-1 media unbind;
 - platform/system/media telemetry through `/api/status`;
 - an owned monotonic video media clock for MP4/RTSP while preserving descriptor word 10 as uninterpreted raw evidence.
 
