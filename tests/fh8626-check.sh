@@ -5,6 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 for suite in \
     fh8626_contract \
+    fh8626_graphv2 \
     fh8626_hal_stub \
     fh8626_native_adapter \
     fh8626_native_runtime \
