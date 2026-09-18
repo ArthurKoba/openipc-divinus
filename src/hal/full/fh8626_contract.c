@@ -1,4 +1,5 @@
 #include "fh8626_contract.h"
+#include "native/h264/fh8626_h264_rc.h"
 
 #include <errno.h>
 #include <string.h>
@@ -141,10 +142,15 @@ int fh8626_video_contract_known(const hal_vidconfig *config)
         return 0;
     if (config->mode != HAL_VIDMODE_CBR &&
         config->mode != HAL_VIDMODE_VBR &&
+        config->mode != HAL_VIDMODE_QP &&
         config->mode != HAL_VIDMODE_AVBR)
         return 0;
-    if (!config->bitrate)
+    if (config->mode == HAL_VIDMODE_QP) {
+        if (config->minQual > FH_PAE_MAX_QP || config->maxQual > FH_PAE_MAX_QP)
+            return 0;
+    } else if (!config->bitrate) {
         return 0;
+    }
     return 1;
 }
 

@@ -1393,6 +1393,14 @@ void respond_request(http_request_t *req) {
                     short result = strtol(value, &remain, 10);
                     if (remain != value)
                         app_config.mp4_bitrate = result;
+                } else if (EQUALS(key, "iqp")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result >= 0 && result <= 51)
+                        app_config.mp4_iqp = (unsigned int)result;
+                } else if (EQUALS(key, "pqp")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result >= 0 && result <= 51)
+                        app_config.mp4_pqp = (unsigned int)result;
                 } else if (EQUALS(key, "h265")) {
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
                         app_config.mp4_codecH265 = 1;

@@ -1,4 +1,5 @@
 #include "fh8626_hal.h"
+#include "native/h264/fh8626_h264_rc.h"
 #ifdef FH8626_NATIVE_KERNEL
 #include "fh8626_kernel.h"
 #endif
@@ -217,6 +218,8 @@ int fh8626_sdk_start(fh8626_video_sink sink)
     requested.gop = app_config.mp4_gop;
     requested.framerate = app_config.mp4_fps;
     requested.bitrate = app_config.mp4_bitrate;
+    requested.minQual = app_config.mp4_iqp;
+    requested.maxQual = app_config.mp4_pqp;
     if (!fh8626_video_contract_known(&requested))
         return -ENOTSUP;
     config = (struct fh8626_native_config){
@@ -224,9 +227,11 @@ int fh8626_sdk_start(fh8626_video_sink sink)
         app_config.mp4_gop,
         app_config.mp4_profile == HAL_VIDPROFILE_MAIN ? 0x4du : 0x42u,
         app_config.mirror ? 1u : 0u, app_config.flip ? 1u : 0u,
-        app_config.mp4_mode == HAL_VIDMODE_VBR ? 0u :
-        app_config.mp4_mode == HAL_VIDMODE_AVBR ? 4u : 1u,
-        app_config.mp4_bitrate};
+        app_config.mp4_mode == HAL_VIDMODE_VBR ? FH_PAE_RC_VBR :
+        app_config.mp4_mode == HAL_VIDMODE_QP ? FH_PAE_RC_FIXED_QP :
+        app_config.mp4_mode == HAL_VIDMODE_AVBR ? FH_PAE_RC_AVBR :
+        FH_PAE_RC_CBR,
+        app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp};
     {
         int native_ret = fh8626_kernel_start(&kernel_context, &config, sink);
         if (!native_ret) {

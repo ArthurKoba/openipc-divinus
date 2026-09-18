@@ -958,18 +958,23 @@ static int kernel_video_create(void *opaque)
     rc_config.chn = 0;
     rc_config.rc_mode = k->config.rc_mode;
     rc_config.frame_rate_packed = fh8626_fps_packed(k->config.fps);
-    rc_config.init_qp = 38;
-    if (k->config.bitrate_kbps > UINT32_MAX / 1000u) {
-        rc = -ERANGE;
-        goto fail;
+    if (k->config.rc_mode == FH_PAE_RC_FIXED_QP) {
+        rc_config.mode2_qp_a = k->config.i_qp;
+        rc_config.mode2_qp_b = k->config.p_qp;
+    } else {
+        rc_config.init_qp = 38;
+        if (k->config.bitrate_kbps > UINT32_MAX / 1000u) {
+            rc = -ERANGE;
+            goto fail;
+        }
+        rc_config.bitrate_or_rate = k->config.bitrate_kbps * 1000u;
+        rc_config.i_min_qp = 30; rc_config.i_max_qp = 50;
+        rc_config.p_min_qp = 30; rc_config.p_max_qp = 50;
+        rc_config.i_proportion = 5; rc_config.p_proportion = 1;
+        rc_config.still_rate_percent = 30; rc_config.max_rate_percent = 120;
+        rc_config.ip_qp_delta = 3;
+        rc_config.max_still_qp = 38;
     }
-    rc_config.bitrate_or_rate = k->config.bitrate_kbps * 1000u;
-    rc_config.i_min_qp = 30; rc_config.i_max_qp = 50;
-    rc_config.p_min_qp = 30; rc_config.p_max_qp = 50;
-    rc_config.i_proportion = 5; rc_config.p_proportion = 1;
-    rc_config.still_rate_percent = 30; rc_config.max_rate_percent = 120;
-    rc_config.ip_qp_delta = 3;
-    rc_config.max_still_qp = 38;
     if (fh_pae_rc_validate_driver(&rc_config) ||
         call_ioctl(k->pae_fd, FH_PAE_SET_RC_CONFIG, &rc_config)) {
         rc = -EIO;

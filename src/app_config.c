@@ -168,6 +168,8 @@ int app_config_save(void) {
     fprintf(file, "  gop: %d\n", app_config.mp4_gop);
     fprintf(file, "  profile: %d\n", app_config.mp4_profile);
     fprintf(file, "  bitrate: %d\n", app_config.mp4_bitrate);
+    fprintf(file, "  iqp: %d\n", app_config.mp4_iqp);
+    fprintf(file, "  pqp: %d\n", app_config.mp4_pqp);
 
     fprintf(file, "osd:\n");
     fprintf(file, "  enable: %s\n", app_config.osd_enable ? "true" : "false");
@@ -265,6 +267,8 @@ enum ConfigError app_config_parse(void) {
     app_config.audio_gain = 0;
     app_config.jpeg_enable = false;
     app_config.mp4_enable = false;
+    app_config.mp4_iqp = 28;
+    app_config.mp4_pqp = 30;
 
     app_config.mjpeg_enable = false;
     app_config.mjpeg_fps = 15;
@@ -519,6 +523,8 @@ enum ConfigError app_config_parse(void) {
             &ini, "mp4", "bitrate", 32, INT_MAX, &app_config.mp4_bitrate);
         if (err != CONFIG_OK)
             goto RET_ERR;
+        parse_int(&ini, "mp4", "iqp", 0, 51, &app_config.mp4_iqp);
+        parse_int(&ini, "mp4", "pqp", 0, 51, &app_config.mp4_pqp);
     }
 
     err = parse_bool(&ini, "jpeg", "enable", &app_config.jpeg_enable);
