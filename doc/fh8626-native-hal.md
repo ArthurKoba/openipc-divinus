@@ -34,11 +34,11 @@ The current provider reports its unresolved production blockers explicitly rathe
 
 The current sensor backend still loads the exact V100-era `libmipi.so` and `libgc1054_mipi.so` callback ABI. This is a bring-up bridge, not the final OpenIPC-native sensor implementation. The clean target should eventually replace it with an open typed MIPI/GC1054 backend without importing opaque uClibc objects into the musl process.
 
-### RTX audio helper
+### RTX audio capture
 
-The physical RTX microphone transport is hardware-proven, but current Divinus audio integration still expects the source-built `fh8626-audio` / `fh8626-audio-rtx` helper. The clean Firmware direction does not currently guarantee that helper is installed. Divinus therefore checks for it explicitly and fails audio startup instead of silently running an encoder without PCM input.
+Divinus now owns the validated FH8626 RTX microphone capture transaction directly through `/dev/rtxbus`: reset, AC init, recovered initialization payload, capture NR configuration, 8 kHz/16-bit/mono/320-byte framing, AI enable/volume, shared-memory frame polling and AI disable on teardown. The former external `fh8626-audio` helper dependency is removed from the Divinus path.
 
-The RTX transport itself is proven; complete self-contained Divinus audio integration is not.
+This source integration is still target-unaccepted as a Divinus candidate. The provider therefore keeps a dedicated audio hardware-acceptance blocker. Speaker/amplifier GPIO policy is deliberately not part of this backend.
 
 ## Runtime reconfiguration boundary
 
@@ -86,7 +86,7 @@ The next target run should prove the exact candidate end-to-end:
 3. RTSP/raw H.264/fMP4 behavior and reconnect/force-IDR;
 4. ISP exposure/color behavior;
 5. JPEG/MJPEG only if enabled in the tested configuration;
-6. RTX audio only when its helper/runtime dependency is deliberately present;
+6. native RTX microphone capture, independently from any board speaker/amplifier policy;
 7. graceful stop and same-boot restart;
 8. board lens/PTZ/illumination behavior through their owning board integration.
 

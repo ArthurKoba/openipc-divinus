@@ -48,7 +48,7 @@ The native source now:
 The provider is intentionally not production-ready. Its blocker mask describes actual remaining work:
 
 - vendor GC1054/MIPI plug-in dependency;
-- external RTX audio helper dependency;
+- native RTX audio target acceptance;
 - complete runtime video-reconfigure transaction;
 - same-boot teardown/restart acceptance;
 - latest-candidate hardware acceptance.
@@ -59,7 +59,7 @@ Recovered/replayed ABI contracts and host tests are not hardware acceptance. In 
 
 - force-IDR is source/reverse-backed but still belongs in the next target regression;
 - JPEG/MJPEG code exists but target acceptance remains unresolved;
-- RTX transport is hardware-proven independently, while the current Divinus helper integration is transitional;
+- RTX transport is hardware-proven independently and is now integrated directly in Divinus, while the latest Divinus integration still needs target acceptance;
 - full open sensor bring-up is unresolved because current native startup still loads vendor V100 sensor/MIPI objects;
 - same-boot cleanup has stronger source behavior now, but the complete physical resource lifecycle still needs a target stop/restart run.
 
