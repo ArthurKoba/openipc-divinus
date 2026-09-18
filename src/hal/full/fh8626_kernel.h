@@ -28,6 +28,8 @@ int fh8626_kernel_is_running(const struct fh8626_kernel *kernel);
 int fh8626_kernel_request_idr(struct fh8626_kernel *kernel);
 int fh8626_kernel_set_bitrate(struct fh8626_kernel *kernel,
     uint32_t bitrate_kbps);
+int fh8626_kernel_set_mirror_flip(struct fh8626_kernel *kernel,
+    int mirror, int flip);
 
 /* JPEG/MJPEG media-object lifecycle.  The source is a dedicated VPU channel
  * bound to the kernel JPEG stream object; callers never submit raw VPU

@@ -953,7 +953,60 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/isp")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            bool next_mirror = app_config.mirror;
+            bool next_flip = app_config.flip;
+            int changed = 0;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                int b;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "mirror") || EQUALS(key, "flip")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        b = 1;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        b = 0;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    if (EQUALS(key, "mirror"))
+                        next_mirror = b;
+                    else
+                        next_flip = b;
+                    changed = 1;
+                } else if (EQUALS(key, "antiflicker")) {
+                    /*
+                     * Stock profile selector 128 is recovered, but its public
+                     * 50/60-Hz naming is not. Reject rather than lie.
+                     */
+                    send_http_error(req->clntFd, 501);
+                    return;
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            if (changed) {
+                int rc = fh8626_set_mirror_flip(next_mirror, next_flip);
+                if (rc) {
+                    send_http_error(req->clntFd, 500);
+                    return;
+                }
+                app_config.mirror = next_mirror;
+                app_config.flip = next_flip;
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");

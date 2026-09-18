@@ -74,7 +74,9 @@ struct fh8626_kernel {
     int awb_last_rc;
     uint32_t frame_status_retry;
     pthread_mutex_t jpeg_lock;
+    pthread_mutex_t control_lock;
     int jpeg_lock_ready;
+    int control_lock_ready;
     pthread_t jpeg_thread;
     int jpeg_thread_started;
     volatile int jpeg_running;
@@ -999,8 +1001,12 @@ static void *kernel_control_thread(void *opaque)
 
     clock_gettime(CLOCK_MONOTONIC, &deadline);
     while (kernel_stream_thread_running(k)) {
-        int rc = kernel_control_tick(k);
+        int rc;
         struct timespec now;
+
+        pthread_mutex_lock(&k->control_lock);
+        rc = kernel_control_tick(k);
+        pthread_mutex_unlock(&k->control_lock);
 
         if (rc != -EAGAIN && rc) {
             k->pump_errors++;
@@ -1633,8 +1639,16 @@ int fh8626_kernel_start(struct fh8626_kernel **out,
         return -rc;
     }
     k->jpeg_lock_ready = 1;
+    rc = pthread_mutex_init(&k->control_lock, NULL);
+    if (rc) {
+        pthread_mutex_destroy(&k->jpeg_lock);
+        free(k);
+        return -rc;
+    }
+    k->control_lock_ready = 1;
     if (!k->config.width || !k->config.height || !k->config.fps ||
         !k->config.bitrate_kbps) {
+        pthread_mutex_destroy(&k->control_lock);
         pthread_mutex_destroy(&k->jpeg_lock);
         free(k);
         return -EINVAL;
@@ -1694,6 +1708,8 @@ int fh8626_kernel_stop(struct fh8626_kernel *k)
     if (k->isp_fd >= 0) close(k->isp_fd);
     if (k->media_fd >= 0) close(k->media_fd);
     if (k->lock_fd >= 0) close(k->lock_fd);
+    if (k->control_lock_ready)
+        pthread_mutex_destroy(&k->control_lock);
     if (k->jpeg_lock_ready)
         pthread_mutex_destroy(&k->jpeg_lock);
     free(k);
@@ -1751,5 +1767,45 @@ int fh8626_kernel_set_bitrate(struct fh8626_kernel *k, uint32_t bitrate_kbps)
     rc = fh_h264_change_rc_realtime(&control, &realtime);
     if (!rc)
         k->config.bitrate_kbps = bitrate_kbps;
+    return rc;
+}
+
+int fh8626_kernel_set_mirror_flip(struct fh8626_kernel *k,
+    int mirror, int flip)
+{
+    uint32_t old_logical, next_logical;
+    uint32_t old_bayer, next_bayer;
+    int rc;
+
+    if (!k || !k->running || !k->control_lock_ready)
+        return -ENODEV;
+
+    old_logical = (k->config.mirror ? 2u : 0u) |
+                  (k->config.flip ? 1u : 0u);
+    next_logical = (mirror ? 2u : 0u) | (flip ? 1u : 0u);
+    if (old_logical == next_logical)
+        return 0;
+
+    rc = fh_sensor_gc1054_bayer_for_mirror_flip(old_logical, &old_bayer);
+    if (rc)
+        return rc;
+    rc = fh_sensor_gc1054_bayer_for_mirror_flip(next_logical, &next_bayer);
+    if (rc)
+        return rc;
+
+    pthread_mutex_lock(&k->control_lock);
+
+    rc = fh_sensor_gc1054_set_mirror_flip(&k->sensor, next_logical);
+    if (!rc)
+        rc = fh_isp_runtime_set_bayer_selector(&k->isp_runtime, next_bayer);
+    if (rc) {
+        (void)fh_sensor_gc1054_set_mirror_flip(&k->sensor, old_logical);
+        (void)fh_isp_runtime_set_bayer_selector(&k->isp_runtime, old_bayer);
+    } else {
+        k->config.mirror = mirror ? 1u : 0u;
+        k->config.flip = flip ? 1u : 0u;
+    }
+
+    pthread_mutex_unlock(&k->control_lock);
     return rc;
 }
