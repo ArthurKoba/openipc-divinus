@@ -59,10 +59,26 @@ static void *capture_main(void *opaque) {
 int fh8626_audio_start(fh8626_audio_frame_cb callback) {
     int pipefd[2];
     int status;
-    if (capture_running) return EXIT_SUCCESS;
-    if (!callback || pipe(pipefd)) return EXIT_FAILURE;
+
+    if (capture_running)
+        return 0;
+    if (!callback)
+        return -EINVAL;
+    /* Transitional boundary: the hardware-proven RTX transport still lives
+     * in the source-built helper. Fail explicitly instead of starting an
+     * encoder thread with no PCM producer when the clean image omits it. */
+    if (access("/usr/sbin/fh8626-audio", X_OK) ||
+        access("/usr/libexec/fh8626-audio-rtx", X_OK))
+        return errno ? -errno : -ENOENT;
+    if (pipe(pipefd))
+        return -errno;
     capture_pid = fork();
-    if (capture_pid < 0) { close(pipefd[0]); close(pipefd[1]); return EXIT_FAILURE; }
+    if (capture_pid < 0) {
+        int saved = errno;
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return -saved;
+    }
     if (capture_pid == 0) {
         dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[0]); close(pipefd[1]);
@@ -77,9 +93,9 @@ int fh8626_audio_start(fh8626_audio_frame_cb callback) {
     if (status) {
         capture_running = 0; close(capture_fd); capture_fd = -1;
         kill(capture_pid, SIGTERM); waitpid(capture_pid, NULL, 0);
-        capture_pid = -1; capture_callback = NULL; return EXIT_FAILURE;
+        capture_pid = -1; capture_callback = NULL; return -status;
     }
-    return EXIT_SUCCESS;
+    return 0;
 }
 
 void fh8626_audio_stop(void) {

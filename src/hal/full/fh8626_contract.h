@@ -53,6 +53,7 @@ struct fh8626_capabilities {
     fh8626_capability_state h264_720p25;
     fh8626_capability_state stream_lease_release;
     fh8626_capability_state sensor_gc1054_init_order;
+    fh8626_capability_state sensor_open_backend;
     fh8626_capability_state isp_direct_kernel_bringup;
     fh8626_capability_state same_boot_full_teardown;
     fh8626_capability_state idr_request;
@@ -61,7 +62,9 @@ struct fh8626_capabilities {
     fh8626_capability_state h265;
     fh8626_capability_state jpeg_snapshot;
     fh8626_capability_state mjpeg;
+    fh8626_capability_state audio_rtx_transport;
     fh8626_capability_state audio;
+    fh8626_capability_state runtime_video_reconfigure;
     fh8626_capability_state temperature;
 };
 

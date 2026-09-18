@@ -302,6 +302,17 @@ int fh8626_native_active(void)
 #endif
 }
 
+int fh8626_request_idr(void)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (!kernel_context)
+        return -ENODEV;
+    return fh8626_kernel_request_idr(kernel_context);
+#else
+    return -ENOTSUP;
+#endif
+}
+
 int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
     uint32_t quality, uint32_t fps, uint32_t bitrate)
 {

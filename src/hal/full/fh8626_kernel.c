@@ -1452,3 +1452,16 @@ int fh8626_kernel_is_running(const struct fh8626_kernel *k)
 {
     return k && k->running;
 }
+
+int fh8626_kernel_request_idr(struct fh8626_kernel *k)
+{
+    struct fh_h264_control control;
+
+    if (!k || k->pae_fd < 0 || !k->running)
+        return -ENODEV;
+    memset(&control, 0, sizeof(control));
+    control.ioctl = kernel_h264_ioctl;
+    control.opaque = k;
+    control.channel = FH8626_NATIVE_CHANNEL;
+    return fh_h264_force_i(&control);
+}

@@ -1533,14 +1533,17 @@ void respond_request(http_request_t *req) {
                 mjpeg_channels);
             snprintf(capabilities_json, sizeof(capabilities_json),
                 "{\"h264_720p25\":\"%s\",\"stream_lease_release\":\"%s\","
-                "\"sensor_gc1054_init_order\":\"%s\",\"isp_direct_kernel_bringup\":\"%s\","
+                "\"sensor_gc1054_init_order\":\"%s\",\"sensor_open_backend\":\"%s\","
+                "\"isp_direct_kernel_bringup\":\"%s\","
                 "\"same_boot_full_teardown\":\"%s\",\"force_idr\":\"%s\","
                 "\"rate_control_mapping\":\"%s\",\"vpss_1080p_scaling\":\"%s\","
                 "\"h265\":\"%s\",\"jpeg_snapshot\":\"%s\",\"mjpeg\":\"%s\","
-                "\"audio_rtx\":\"%s\",\"temperature\":\"%s\"}",
+                "\"audio_rtx_transport\":\"%s\",\"audio\":\"%s\","
+                "\"runtime_video_reconfigure\":\"%s\",\"temperature\":\"%s\"}",
                 fh8626_capability_state_name(caps.h264_720p25),
                 fh8626_capability_state_name(caps.stream_lease_release),
                 fh8626_capability_state_name(caps.sensor_gc1054_init_order),
+                fh8626_capability_state_name(caps.sensor_open_backend),
                 fh8626_capability_state_name(caps.isp_direct_kernel_bringup),
                 fh8626_capability_state_name(caps.same_boot_full_teardown),
                 fh8626_capability_state_name(caps.idr_request),
@@ -1549,7 +1552,9 @@ void respond_request(http_request_t *req) {
                 fh8626_capability_state_name(caps.h265),
                 fh8626_capability_state_name(caps.jpeg_snapshot),
                 fh8626_capability_state_name(caps.mjpeg),
+                fh8626_capability_state_name(caps.audio_rtx_transport),
                 fh8626_capability_state_name(caps.audio),
+                fh8626_capability_state_name(caps.runtime_video_reconfigure),
                 fh8626_capability_state_name(caps.temperature));
         } else {
             snprintf(media_json, sizeof(media_json),

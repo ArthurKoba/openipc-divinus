@@ -2,9 +2,6 @@
 #include "hal/full/fh8626_hal.h"
 #include "hal/full/fh8626_audio.h"
 
-#include <errno.h>
-#include <fcntl.h>
-
 char audioOn = 0, udpOn = 0;
 pthread_mutex_t aencMtx, chnMtx, mp4Mtx;
 pthread_t aencPid = 0, audPid = 0, ispPid = 0, vidPid = 0;
@@ -276,8 +273,9 @@ void media_stop(void) {
 
 void request_idr(void) {
     if (plat == HAL_PLATFORM_FH8626) {
-        /* Native force-IDR is not yet evidence-backed. The encoder GOP bounds
-         * the wait; do not revive the retired owner-control FIFO here. */
+        int ret = fh8626_request_idr();
+        if (ret)
+            HAL_WARNING("media", "FH8626 force-IDR failed with %#x\n", ret);
         return;
     }
 
