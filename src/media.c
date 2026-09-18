@@ -516,29 +516,43 @@ int media_audio_enable(void) {
         case HAL_PLATFORM_CVI: ret = cvi_audio_init(app_config.audio_srate); break;
 #endif
     }
-    if (ret)
-        HAL_ERROR("media", "Audio initialization failed with %#x!\n%s\n",
+    if (ret) {
+        ringbuf_destroy(&audRing);
+        HAL_DANGER("media", "Audio initialization failed with %#x!\n%s\n",
             ret, errstr(ret));
-
-    if (shine_check_config(app_config.audio_srate, app_config.audio_bitrate) < 0)
-        HAL_ERROR("media", "MP3 samplerate/bitrate configuration is unsupported!\n");
-    else {
-        mp3Cnf.mpeg.mode = MONO;
-        mp3Cnf.mpeg.bitr = app_config.audio_bitrate;
-        mp3Cnf.mpeg.emph = NONE;
-        mp3Cnf.mpeg.copyright = 0;
-        mp3Cnf.mpeg.original = 1;
-        mp3Cnf.wave.channels = PCM_MONO;
-        mp3Cnf.wave.samplerate = app_config.audio_srate;
-        if (!(mp3Enc = shine_initialise(&mp3Cnf)))
-            HAL_ERROR("media", "MP3 encoder initialization failed!\n");
-
-        pcmSamp = shine_samples_per_pass(mp3Enc);
+        return EXIT_FAILURE;
     }
 
-    audioOn = 1;
+    if (shine_check_config(app_config.audio_srate, app_config.audio_bitrate) < 0) {
+        ringbuf_destroy(&audRing);
+        HAL_DANGER("media", "MP3 samplerate/bitrate configuration is unsupported!\n");
+        return EXIT_FAILURE;
+    }
 
-    if (plat != HAL_PLATFORM_FH8626) {
+    mp3Cnf.mpeg.mode = MONO;
+    mp3Cnf.mpeg.bitr = app_config.audio_bitrate;
+    mp3Cnf.mpeg.emph = NONE;
+    mp3Cnf.mpeg.copyright = 0;
+    mp3Cnf.mpeg.original = 1;
+    mp3Cnf.wave.channels = PCM_MONO;
+    mp3Cnf.wave.samplerate = app_config.audio_srate;
+    if (!(mp3Enc = shine_initialise(&mp3Cnf))) {
+        ringbuf_destroy(&audRing);
+        HAL_DANGER("media", "MP3 encoder initialization failed!\n");
+        return EXIT_FAILURE;
+    }
+    pcmSamp = shine_samples_per_pass(mp3Enc);
+
+    if (plat == HAL_PLATFORM_FH8626) {
+        ret = fh8626_audio_start(save_audio_stream);
+        if (ret) {
+            ringbuf_destroy(&audRing);
+            shine_close(mp3Enc);
+            HAL_DANGER("media",
+                "FH8626 RTX audio capture startup failed with %#x!\n", ret);
+            return EXIT_FAILURE;
+        }
+    } else {
         pthread_attr_t thread_attr;
         pthread_attr_init(&thread_attr);
         size_t stacksize;
@@ -546,13 +560,20 @@ int media_audio_enable(void) {
         size_t new_stacksize = 16384;
         if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
             HAL_DANGER("media", "Can't set stack size %zu\n", new_stacksize);
-        if (pthread_create(
-                        &audPid, &thread_attr, (void *(*)(void *))aud_thread, NULL))
-            HAL_ERROR("media", "Starting the audio capture thread failed!\n");
+        ret = pthread_create(
+            &audPid, &thread_attr, (void *(*)(void *))aud_thread, NULL);
         if (pthread_attr_setstacksize(&thread_attr, stacksize))
             HAL_DANGER("media", "Can't set stack size %zu\n", stacksize);
         pthread_attr_destroy(&thread_attr);
+        if (ret) {
+            ringbuf_destroy(&audRing);
+            shine_close(mp3Enc);
+            HAL_DANGER("media", "Starting the audio capture thread failed!\n");
+            return EXIT_FAILURE;
+        }
     }
+
+    audioOn = 1;
 
     {
         pthread_attr_t thread_attr;
@@ -562,19 +583,26 @@ int media_audio_enable(void) {
         size_t new_stacksize = 16384;
         if (pthread_attr_setstacksize(&thread_attr, new_stacksize))
             HAL_DANGER("media", "Can't set stack size %zu\n", new_stacksize);
-        if (pthread_create(
-                        &aencPid, &thread_attr, (void *(*)(void *))aenc_thread, NULL))
-            HAL_ERROR("media", "Starting the audio encoding thread failed!\n");
+        ret = pthread_create(
+            &aencPid, &thread_attr, (void *(*)(void *))aenc_thread, NULL);
         if (pthread_attr_setstacksize(&thread_attr, stacksize))
             HAL_DANGER("media", "Can't set stack size %zu\n", stacksize);
         pthread_attr_destroy(&thread_attr);
     }
 
-    if (plat == HAL_PLATFORM_FH8626 &&
-        fh8626_audio_start(save_audio_stream))
-        HAL_ERROR("media", "FH8626 RTX audio capture startup failed!\n");
+    if (ret) {
+        audioOn = 0;
+        if (plat == HAL_PLATFORM_FH8626)
+            fh8626_audio_stop();
+        else
+            pthread_join(audPid, NULL);
+        ringbuf_destroy(&audRing);
+        shine_close(mp3Enc);
+        HAL_DANGER("media", "Starting the audio encode thread failed!\n");
+        return EXIT_FAILURE;
+    }
 
-    return ret;
+    return EXIT_SUCCESS;
 }
 
 int media_mjpeg_disable(void) {
@@ -766,11 +794,21 @@ int sdk_start(void) {
             HAL_ERROR("media", "FH8626 native SDK startup failed with %#x!\n", ret);
         else {
             mp4_set_config(app_config.mp4_width, app_config.mp4_height,
-                app_config.mp4_fps, HAL_AUDCODEC_UNSPEC, 0, 1, 0);
-            if (app_config.jpeg_enable && (ret = jpeg_init()))
+                app_config.mp4_fps,
+                app_config.audio_enable ? HAL_AUDCODEC_MP3 : HAL_AUDCODEC_UNSPEC,
+                app_config.audio_bitrate, 1, app_config.audio_srate);
+            if (app_config.jpeg_enable && (ret = jpeg_init())) {
+                (void)fh8626_sdk_stop();
                 HAL_ERROR("media", "FH8626 JPEG initialization failed with %#x!\n", ret);
-            if (app_config.mjpeg_enable && (ret = media_mjpeg_enable()))
+            }
+            if (app_config.mjpeg_enable && (ret = media_mjpeg_enable())) {
+                (void)fh8626_sdk_stop();
                 HAL_ERROR("media", "FH8626 MJPEG initialization failed with %#x!\n", ret);
+            }
+            if (app_config.audio_enable && (ret = media_audio_enable())) {
+                (void)fh8626_sdk_stop();
+                HAL_ERROR("media", "FH8626 audio initialization failed with %#x!\n", ret);
+            }
             HAL_INFO("media", "FH8626 native SDK has started successfully!\n");
         }
         return ret;
@@ -976,6 +1014,8 @@ int sdk_start(void) {
 
 int sdk_stop(void) {
     if (plat == HAL_PLATFORM_FH8626) {
+        if (audioOn)
+            media_audio_disable();
         int ret = fh8626_sdk_stop();
         if (ret)
             HAL_ERROR("media", "FH8626 native SDK shutdown failed with %#x!\n", ret);

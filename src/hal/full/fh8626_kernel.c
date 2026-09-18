@@ -225,10 +225,19 @@ static int kernel_copy(void *opaque, uint8_t *dst, const uint8_t *src,
 }
 
 static int kernel_ioctl_adapter(void *opaque, int fd, unsigned long request,
-                                void *arg)
+                                 void *arg)
 {
     (void)opaque;
     return call_ioctl(fd, request, arg);
+}
+
+static int kernel_h264_ioctl(void *opaque, unsigned long request, void *arg)
+{
+    struct fh8626_kernel *k = opaque;
+
+    if (!k || k->pae_fd < 0)
+        return -ENODEV;
+    return call_ioctl(k->pae_fd, request, arg);
 }
 
 static int kernel_ae_timing(void *opaque, uint32_t timing[4])
