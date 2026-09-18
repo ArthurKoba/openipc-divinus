@@ -9,6 +9,7 @@
 #include "native/control/fh8626_control_status_tail.h"
 #include "native/media/fh8626_geometry_linux.h"
 #include "native/media/fh8626_media_timing.h"
+#include "native/jpeg/fh8626_jpeg_config.h"
 #include "native/sensor/gc1054/fh8626_sensor_gc1054_day_profile.h"
 #include "../globals.h"
 #include "../../app_config.h"
@@ -84,7 +85,7 @@ struct fh8626_kernel {
     uint32_t jpeg_latest_width, jpeg_latest_height;
     struct {
         struct fh8626_mem3 mem;
-        uint32_t mode, width, height;
+        uint32_t mode, width, height, quality, fps, bitrate;
         int ready;
     } jpeg_slot[2];
 };
@@ -1313,7 +1314,9 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
     uint32_t bitrate)
 {
     uint32_t query[4] = {mode, width, height, 0u};
-    uint32_t init[6], cfg[13] = {0};
+    uint32_t init[6];
+    struct fh_jpeg_cfg_wire mjpeg_cfg;
+    uint32_t snapshot_cfg[4];
     int index, rc;
 
     if (!k || !width || !height || !fps)
@@ -1357,30 +1360,39 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
     if (rc)
         goto fail_mem;
     if (mode == FH8626_JPEG_MODE_SNAPSHOT) {
-        cfg[0] = mode;
-        cfg[1] = width;
-        cfg[2] = height;
-        cfg[3] = 0u;
-        rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_SET_CHN_CFG, cfg);
+        /*
+         * jpeg_set_chn_cfg is a four-word snapshot policy record:
+         * QP selector, resize mode, speed, rotation. Geometry belongs to
+         * MEM_INIT/VPSS and must not be duplicated here.
+         */
+        snapshot_cfg[0] = quality;
+        snapshot_cfg[1] = 2u;
+        snapshot_cfg[2] = 4u;
+        snapshot_cfg[3] = 0u;
+        rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_SET_CHN_CFG, snapshot_cfg);
     } else {
-        cfg[0] = mode;
-        cfg[1] = width;
-        cfg[2] = height;
-        cfg[3] = (1u << 16) | FH8626_NATIVE_FPS;
-        cfg[4] = (1u << 16) | fps;
-        cfg[5] = 0u;
-        cfg[6] = quality;
-        cfg[7] = bitrate * 1000u;
-        cfg[8] = 0u;
-        cfg[9] = 98u;
-        cfg[10] = 0u;
-        cfg[11] = 0u;
-        cfg[12] = 0u;
-        rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_MJPEG_SET_CFG, cfg);
-        if (!rc) {
-            uint32_t start = mode;
-            rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_START, &start);
+        memset(&mjpeg_cfg, 0, sizeof(mjpeg_cfg));
+        mjpeg_cfg.mode = mode;
+        mjpeg_cfg.width = width;
+        mjpeg_cfg.height = height;
+        mjpeg_cfg.src_fps_packed = fh8626_fps_packed(k->config.fps);
+        mjpeg_cfg.dst_fps_packed = fh8626_fps_packed(fps);
+        /* Divinus QP mode is the fully recovered path: rc_selector 0. */
+        mjpeg_cfg.rc_selector = 0u;
+        mjpeg_cfg.qp = quality;
+        mjpeg_cfg.target_rate = bitrate * 1000u;
+        mjpeg_cfg.min_qp = 0u;
+        mjpeg_cfg.max_qp = FH_JPEG_QP_MAX;
+        mjpeg_cfg.rate_selector = 0u;
+        mjpeg_cfg.secondary_rate = 0u;
+        mjpeg_cfg.rotation = 0u;
+        if (fh_jpeg_cfg_validate_sdk(&mjpeg_cfg)) {
+            rc = -EINVAL;
+            goto fail_mem;
         }
+        rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_MJPEG_SET_CFG, &mjpeg_cfg);
+        if (!rc)
+            rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_START, NULL);
     }
     if (rc)
         goto fail_mem;
@@ -1391,6 +1403,9 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
     k->jpeg_slot[index].mode = mode;
     k->jpeg_slot[index].width = width;
     k->jpeg_slot[index].height = height;
+    k->jpeg_slot[index].quality = quality;
+    k->jpeg_slot[index].fps = fps;
+    k->jpeg_slot[index].bitrate = bitrate;
     k->jpeg_slot[index].ready = 1;
     if (mode == FH8626_JPEG_MODE_MJPEG && !k->jpeg_thread_started) {
         k->jpeg_running = 1;
@@ -1426,12 +1441,12 @@ static int kernel_jpeg_snapshot_get(struct fh8626_kernel *k, uint32_t width,
     uintptr_t base, end;
     int rc;
 
-    (void)quality;
     if (!k || !jpeg || !width || !height)
         return -EINVAL;
     pthread_mutex_lock(&k->jpeg_lock);
     if (!k->jpeg_slot[0].ready || width > k->jpeg_slot[0].width ||
-        height > k->jpeg_slot[0].height) {
+        height > k->jpeg_slot[0].height ||
+        quality != k->jpeg_slot[0].quality) {
         pthread_mutex_unlock(&k->jpeg_lock);
         return -ENOTSUP;
     }
@@ -1479,7 +1494,8 @@ int fh8626_kernel_jpeg_get(struct fh8626_kernel *k, uint32_t width,
         return -EINVAL;
     pthread_mutex_lock(&k->jpeg_lock);
     if (k->jpeg_slot[1].ready && k->jpeg_latest && k->jpeg_latest_len &&
-        width <= k->jpeg_latest_width && height <= k->jpeg_latest_height) {
+        width <= k->jpeg_latest_width && height <= k->jpeg_latest_height &&
+        quality == k->jpeg_slot[1].quality) {
         jpeg->data = malloc(k->jpeg_latest_len);
         if (!jpeg->data) {
             pthread_mutex_unlock(&k->jpeg_lock);
@@ -1492,8 +1508,9 @@ int fh8626_kernel_jpeg_get(struct fh8626_kernel *k, uint32_t width,
         return 0;
     }
     if (k->jpeg_slot[1].ready) {
+        int qrc = quality == k->jpeg_slot[1].quality ? -EAGAIN : -ENOTSUP;
         pthread_mutex_unlock(&k->jpeg_lock);
-        return -EAGAIN;
+        return qrc;
     }
     pthread_mutex_unlock(&k->jpeg_lock);
     rc = kernel_jpeg_snapshot_get(k, width, height, quality, jpeg);
@@ -1531,7 +1548,7 @@ int fh8626_kernel_jpeg_deinit_mode(struct fh8626_kernel *k, uint32_t wanted_mode
         k->jpeg_slot[i].ready = 0;
     }
     if (k->jpeg_ready && !k->jpeg_slot[0].ready && !k->jpeg_slot[1].ready) {
-        uint32_t source = wanted_mode == FH8626_JPEG_MODE_SNAPSHOT ? 3u : 2u;
+        uint32_t source = 2u;
         (void)ioctl(k->media_fd, FH8626_MEDIA_UNBIND_SRC, &source);
         k->jpeg_ready = 0;
     }
