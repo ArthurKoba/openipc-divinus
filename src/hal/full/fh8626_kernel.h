@@ -24,6 +24,7 @@ struct fh8626_native_config {
     uint32_t p_qp;
     uint32_t secondary_bitrate_kbps;
     uint32_t extra_qp;
+    int32_t antiflicker;
 };
 
 int fh8626_kernel_start(struct fh8626_kernel **out,
@@ -36,6 +37,7 @@ int fh8626_kernel_set_bitrate(struct fh8626_kernel *kernel,
 int fh8626_kernel_set_mirror_flip(struct fh8626_kernel *kernel,
     int mirror, int flip);
 int fh8626_kernel_set_grayscale(struct fh8626_kernel *kernel, int enabled);
+int fh8626_kernel_set_antiflicker(struct fh8626_kernel *kernel, int hz);
 
 /* JPEG/MJPEG media-object lifecycle.  The source is a dedicated VPU channel
  * bound to the kernel JPEG stream object; callers never submit raw VPU

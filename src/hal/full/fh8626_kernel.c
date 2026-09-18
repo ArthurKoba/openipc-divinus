@@ -789,6 +789,10 @@ static int kernel_system_init(void *opaque)
     rc = load_profile(k);
     if (rc)
         return rc;
+    rc = fh_isp_runtime_set_antiflicker(&k->isp_runtime,
+        k->config.antiflicker);
+    if (rc)
+        return rc;
     isp_regs_720p(k->mmio);
     if (fh_isp_runtime_apply_known_stock_init(&k->isp_runtime,
             FH8626_NATIVE_WIDTH, FH8626_NATIVE_HEIGHT))
@@ -2243,6 +2247,22 @@ int fh8626_kernel_osd_destroy(struct fh8626_kernel *k, uint32_t id)
 
     cleanup_rc = release_osd_slot(&old);
     return cleanup_rc;
+}
+
+int fh8626_kernel_set_antiflicker(struct fh8626_kernel *k, int hz)
+{
+    int rc;
+
+    if (!k || !k->running || !k->control_lock_ready)
+        return -ENODEV;
+
+    pthread_mutex_lock(&k->control_lock);
+    if (!k->running)
+        rc = -ENODEV;
+    else
+        rc = fh_isp_runtime_set_antiflicker(&k->isp_runtime, hz);
+    pthread_mutex_unlock(&k->control_lock);
+    return rc;
 }
 
 int fh8626_kernel_set_grayscale(struct fh8626_kernel *k, int enabled)

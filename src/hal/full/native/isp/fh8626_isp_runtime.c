@@ -1689,6 +1689,30 @@ int fh_isp_runtime_set_d1724_stats(struct fh_isp_runtime *rt,
 /* D1DB0 exact consumer algorithm. The stock GOT 0x316D14 coefficient object
  * is installed by reset; the setter remains available for controlled IQ
  * overrides. */
+/*
+ * Apollo C7264 uses ctx+0xa4c directly as the divisor in 500000/frequency.
+ * The FH8852 debug-symbol donor independently names the corresponding public
+ * field u16Frequency and performs the same literal 500000 division.
+ * Apollo C883C selects C72A0 when ctx+0x2c bit3 is set.  Preserve the
+ * profile-owned mode flags (notably ctx+0xa4f) and change only enable/freq.
+ */
+int fh_isp_runtime_set_antiflicker(struct fh_isp_runtime *rt, int hz)
+{
+    unsigned frequency;
+
+    if (!rt)
+        return -EINVAL;
+
+    frequency = hz >= 60 ? 60u : hz >= 50 ? 50u : 0u;
+    if (frequency) {
+        rt->ctx[0xa4cu] = (uint8_t)frequency;
+        rt->ctx[0x2cu] |= 0x08u;
+    } else {
+        rt->ctx[0x2cu] &= (uint8_t)~0x08u;
+    }
+    return 0;
+}
+
 int fh_isp_runtime_set_grayscale(struct fh_isp_runtime *rt, int enabled)
 {
     uint8_t old_ctx[FH8626_SATURATION_CTX_BYTES];

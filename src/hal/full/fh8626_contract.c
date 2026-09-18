@@ -191,6 +191,7 @@ struct fh8626_capabilities fh8626_capabilities_current(void)
     caps.runtime_video_reconfigure = FH8626_CAP_PROVEN;
     caps.osd_graphv2 = FH8626_CAP_PROVEN;
     caps.grayscale_shared_context = FH8626_CAP_PROVEN;
+    caps.antiflicker = FH8626_CAP_PROVEN;
     caps.night_board_wiring = FH8626_CAP_PROVEN;
     caps.temperature = FH8626_CAP_UNSUPPORTED;
     return caps;

@@ -198,6 +198,7 @@ int fh_isp_runtime_apply_ce764(struct fh_isp_runtime *rt);
 int fh_isp_runtime_apply_cfd70(struct fh_isp_runtime *rt);
 int fh_isp_runtime_apply_d1db0_lut(struct fh_isp_runtime *rt);
 int fh_isp_runtime_set_grayscale(struct fh_isp_runtime *rt, int enabled);
+int fh_isp_runtime_set_antiflicker(struct fh_isp_runtime *rt, int hz);
 int fh_isp_runtime_set_d1db0_coeffs(struct fh_isp_runtime *rt, const struct fh_isp_stock_d1db0_coeffs *coeffs);
 int fh_isp_runtime_set_d16a4_rows(struct fh_isp_runtime *rt, const uint32_t rows[8][6]);
 int fh_isp_runtime_set_d1724_stats(struct fh_isp_runtime *rt, const struct fh_isp_stock_d1724_stat24 stats[32]);

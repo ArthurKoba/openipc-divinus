@@ -402,6 +402,14 @@ enum ConfigError app_config_parse(void) {
     if (err != CONFIG_OK)
         goto RET_ERR;
     parse_int(&ini, "isp", "antiflicker", -1, 60, &app_config.antiflicker);
+    if (plat == HAL_PLATFORM_FH8626) {
+        if (app_config.antiflicker >= 60)
+            app_config.antiflicker = 60;
+        else if (app_config.antiflicker >= 50)
+            app_config.antiflicker = 50;
+        else
+            app_config.antiflicker = 0;
+    }
 
     parse_bool(&ini, "mdns", "enable", &app_config.mdns_enable);
 

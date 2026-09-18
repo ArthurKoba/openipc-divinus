@@ -1262,13 +1262,19 @@ void respond_request(http_request_t *req) {
 
     if (EQUALS(req->uri, "/api/isp")) {
         if (req->query && plat == HAL_PLATFORM_FH8626) {
-            bool next_mirror = app_config.mirror;
-            bool next_flip = app_config.flip;
-            int changed = 0;
+            bool old_mirror = app_config.mirror;
+            bool old_flip = app_config.flip;
+            int old_antiflicker = app_config.antiflicker;
+            bool next_mirror = old_mirror;
+            bool next_flip = old_flip;
+            int next_antiflicker = old_antiflicker;
+            int orientation_changed = 0;
+            int antiflicker_changed = 0;
 
             while (req->query) {
                 char *value = split(&req->query, "&");
                 char *key;
+                char *remain;
                 int b;
 
                 if (!value || !*value)
@@ -1291,29 +1297,50 @@ void respond_request(http_request_t *req) {
                         next_mirror = b;
                     else
                         next_flip = b;
-                    changed = 1;
                 } else if (EQUALS(key, "antiflicker")) {
-                    /*
-                     * Stock profile selector 128 is recovered, but its public
-                     * 50/60-Hz naming is not. Reject rather than lie.
-                     */
-                    send_http_error(req->clntFd, 501);
-                    return;
+                    long parsed;
+                    errno = 0;
+                    parsed = strtol(value, &remain, 10);
+                    if (errno || remain == value || *remain ||
+                        parsed < -1 || parsed > 60) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_antiflicker = parsed >= 60 ? 60 :
+                        parsed >= 50 ? 50 : 0;
                 } else {
                     send_http_error(req->clntFd, 400);
                     return;
                 }
             }
 
-            if (changed) {
-                int rc = fh8626_set_mirror_flip(next_mirror, next_flip);
+            orientation_changed =
+                next_mirror != old_mirror || next_flip != old_flip;
+            antiflicker_changed = next_antiflicker != old_antiflicker;
+
+            if (antiflicker_changed) {
+                int rc = fh8626_set_antiflicker(next_antiflicker);
                 if (rc) {
                     send_http_error(req->clntFd, 500);
                     return;
                 }
-                app_config.mirror = next_mirror;
-                app_config.flip = next_flip;
             }
+            if (orientation_changed) {
+                int rc = fh8626_set_mirror_flip(next_mirror, next_flip);
+                if (rc) {
+                    if (antiflicker_changed &&
+                        fh8626_set_antiflicker(old_antiflicker)) {
+                        send_http_error(req->clntFd, 503);
+                        return;
+                    }
+                    send_http_error(req->clntFd, 500);
+                    return;
+                }
+            }
+
+            app_config.mirror = next_mirror;
+            app_config.flip = next_flip;
+            app_config.antiflicker = next_antiflicker;
         } else if (req->query) {
             char *remain;
             while (req->query) {
@@ -2292,6 +2319,7 @@ void respond_request(http_request_t *req) {
                 "\"runtime_video_reconfigure\":\"%s\","
                 "\"osd_graphv2\":\"%s\","
                 "\"grayscale_shared_context\":\"%s\","
+                "\"antiflicker\":\"%s\","
                 "\"night_board_wiring\":\"%s\",\"temperature\":\"%s\"}",
                 fh8626_capability_state_name(caps.h264_720p25),
                 fh8626_capability_state_name(caps.stream_lease_release),
@@ -2311,6 +2339,7 @@ void respond_request(http_request_t *req) {
                 fh8626_capability_state_name(caps.runtime_video_reconfigure),
                 fh8626_capability_state_name(caps.osd_graphv2),
                 fh8626_capability_state_name(caps.grayscale_shared_context),
+                fh8626_capability_state_name(caps.antiflicker),
                 fh8626_capability_state_name(caps.night_board_wiring),
                 fh8626_capability_state_name(caps.temperature));
         } else {

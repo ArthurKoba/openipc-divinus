@@ -229,17 +229,26 @@ int fh8626_sdk_start(fh8626_video_sink sink)
     if (!fh8626_video_contract_known(&requested))
         return -ENOTSUP;
     config = (struct fh8626_native_config){
-        app_config.mp4_width, app_config.mp4_height, app_config.mp4_fps,
-        app_config.mp4_gop,
-        app_config.mp4_profile == HAL_VIDPROFILE_MAIN ? 0x4du : 0x42u,
-        app_config.mirror ? 1u : 0u, app_config.flip ? 1u : 0u,
-        app_config.mp4_mode == HAL_VIDMODE_VBR ? FH_PAE_RC_VBR :
-        app_config.mp4_mode == HAL_VIDMODE_QP ? FH_PAE_RC_FIXED_QP :
-        app_config.mp4_mode == HAL_VIDMODE_AVBR ? FH_PAE_RC_AVBR :
-        app_config.mp4_mode == HAL_VIDMODE_CVBR ? FH_PAE_RC_CVBR :
-        FH_PAE_RC_CBR,
-        app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp,
-        app_config.mp4_secondary_bitrate, app_config.mp4_extra_qp};
+        .width = app_config.mp4_width,
+        .height = app_config.mp4_height,
+        .fps = app_config.mp4_fps,
+        .gop = app_config.mp4_gop,
+        .profile = app_config.mp4_profile == HAL_VIDPROFILE_MAIN ? 0x4du : 0x42u,
+        .mirror = app_config.mirror ? 1u : 0u,
+        .flip = app_config.flip ? 1u : 0u,
+        .rc_mode =
+            app_config.mp4_mode == HAL_VIDMODE_VBR ? FH_PAE_RC_VBR :
+            app_config.mp4_mode == HAL_VIDMODE_QP ? FH_PAE_RC_FIXED_QP :
+            app_config.mp4_mode == HAL_VIDMODE_AVBR ? FH_PAE_RC_AVBR :
+            app_config.mp4_mode == HAL_VIDMODE_CVBR ? FH_PAE_RC_CVBR :
+            FH_PAE_RC_CBR,
+        .bitrate_kbps = app_config.mp4_bitrate,
+        .i_qp = app_config.mp4_iqp,
+        .p_qp = app_config.mp4_pqp,
+        .secondary_bitrate_kbps = app_config.mp4_secondary_bitrate,
+        .extra_qp = app_config.mp4_extra_qp,
+        .antiflicker = app_config.antiflicker,
+    };
     {
         int native_ret;
 
@@ -384,6 +393,21 @@ int fh8626_set_mirror_flip(int mirror, int flip)
 #else
     (void)mirror;
     (void)flip;
+    return -ENOTSUP;
+#endif
+}
+
+int fh8626_set_antiflicker(int hz)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    int rc;
+    pthread_mutex_lock(&kernel_context_lock);
+    rc = kernel_context ?
+        fh8626_kernel_set_antiflicker(kernel_context, hz) : -ENODEV;
+    pthread_mutex_unlock(&kernel_context_lock);
+    return rc;
+#else
+    (void)hz;
     return -ENOTSUP;
 #endif
 }
