@@ -216,8 +216,7 @@ int fh8626_sdk_start(fh8626_video_sink sink)
     config = (struct fh8626_native_config){
         app_config.mp4_width, app_config.mp4_height, app_config.mp4_fps,
         app_config.mp4_mode == HAL_VIDMODE_VBR ? 0u :
-        app_config.mp4_mode == HAL_VIDMODE_AVBR ? 4u :
-        app_config.mp4_mode == HAL_VIDMODE_QP ? 2u : 1u,
+        app_config.mp4_mode == HAL_VIDMODE_AVBR ? 4u : 1u,
         app_config.mp4_bitrate};
     {
         int native_ret = fh8626_kernel_start(&kernel_context, &config, sink);

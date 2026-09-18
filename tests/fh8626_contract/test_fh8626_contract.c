@@ -86,6 +86,8 @@ static void test_video_contract(void)
     cfg.gop = 50;
     assert(!fh8626_video_contract_known(&cfg));
     cfg.gop = 25;
+    cfg.mode = HAL_VIDMODE_QP;
+    assert(!fh8626_video_contract_known(&cfg));
     cfg.mode = HAL_VIDMODE_ABR;
     assert(!fh8626_video_contract_known(&cfg));
     cfg.mode = HAL_VIDMODE_CBR;

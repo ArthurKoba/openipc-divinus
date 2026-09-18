@@ -52,9 +52,10 @@ _✔️ - supported, ↻ - in development, ✗ - unsupported, ⁿ/ₐ - not supp
 
 FH8626V100 uses the native Fullhan HAL in `src/hal/full/`. Divinus owns the
 sensor/ISP/media/VENC path directly; the former external FH86 H.264 owner/socket
-frontend is retired. RTX audio capture remains a separate Fullhan hardware
-backend because that is the board's hardware-proven audio ownership path.
-Board-specific lens, illumination, reset and PTZ policy stays outside Divinus.
+frontend is retired. RTX microphone capture is owned directly by the Fullhan
+HAL through `/dev/rtxbus`; speaker/amplifier GPIO policy is intentionally not
+part of the platform backend. Board-specific lens, illumination, reset and PTZ
+policy stays outside Divinus.
 
 _* At the moment, text, RGB or bitfield bitmaps and PNG overlays are handled, more matricial formats and covers are to follow_
 

@@ -17,7 +17,7 @@ The current source contains the recovered native contracts for:
 - GC1054 1280x720 at 25 fps initialization/order;
 - ISP context/MMIO initialization and corrected runtime statistics-bank ownership;
 - VPU/PAE allocation, channel creation, bind and H.264 startup;
-- H.264 CBR/VBR/QP/AVBR wire mapping used by cold startup;
+- H.264 CBR/VBR/AVBR wire mapping used by cold startup; fixed-QP is rejected until Divinus has an evidence-backed I/P-QP configuration contract;
 - `MEDIA_STREAM_6` dequeue, ring-wrap handling and exactly-once `PAE_STREAM_STEP` release;
 - owned-copy conversion to normal Divinus `hal_vidstream`;
 - force-IDR through the recovered `FH_PAE_FORCE_I` operation;
@@ -80,7 +80,7 @@ Run the focused source/contract suite with:
 
 `tests/fh8626-check.sh`
 
-It covers contract, stub HAL, native adapter, lifecycle, provider boundary and stream-backend tests. Passing these checks is source validation only; it does not promote the latest native candidate to hardware acceptance.
+It covers FH contract/stub/adapter/lifecycle/provider/stream-backend tests plus RTSP thread and transport-framing/AU regressions. Passing these checks is source validation only; it does not promote the latest native candidate to hardware acceptance.
 
 ## Current hardware gates
 
