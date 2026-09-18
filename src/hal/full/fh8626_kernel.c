@@ -10,6 +10,7 @@
 #include "native/media/fh8626_geometry_linux.h"
 #include "native/media/fh8626_media_timing.h"
 #include "native/jpeg/fh8626_jpeg_config.h"
+#include "native/osd/fh8626_graphv2.h"
 #include "native/sensor/gc1054/fh8626_sensor_gc1054_day_profile.h"
 #include "../globals.h"
 #include "../../app_config.h"
@@ -35,6 +36,15 @@
 #define FH8626_ISP_MASK      0x000FFFFFu
 #define FH8626_SCRATCH_SIZE  (4u * 1024u * 1024u)
 #define FH8626_ISP_NR3D_QUERY 0x80206926UL
+
+struct fh8626_osd_slot {
+    int vmm_fd;
+    struct fh8626_mem3 mem;
+    uint32_t width;
+    uint32_t height;
+    uint32_t stride;
+    int visible;
+};
 
 struct fh8626_kernel {
     int media_fd, isp_fd, pae_fd, vmm_fd, mem_fd, jpeg_fd;
@@ -94,6 +104,7 @@ struct fh8626_kernel {
         uint32_t mode, width, height, quality, fps, bitrate;
         int ready;
     } jpeg_slot[2];
+    struct fh8626_osd_slot osd_slot[FH8626_OSD_HW_SLOTS];
 };
 
 static void *map_phys(int fd, size_t len, uint32_t phys)
@@ -136,13 +147,15 @@ static int open_required_device(const char *path, int flags, int *out)
     return 0;
 }
 
-static int alloc_vmm(struct fh8626_kernel *k, const char *name, uint32_t need,
-                     struct fh8626_mem3 *mem)
+static int alloc_vmm_fd(int vmm_fd, const char *name, uint32_t need,
+                        struct fh8626_mem3 *mem)
 {
     uint8_t request[104];
     void *mapped;
+    int rc;
 
-    if (!k || !name || !need || !mem || mem->phys || mem->virt || mem->size)
+    if (vmm_fd < 0 || !name || !need || !mem ||
+        mem->phys || mem->virt || mem->size)
         return -EINVAL;
     mem->size = (need + 4095u) & ~4095u;
     memset(request, 0, sizeof(request));
@@ -150,19 +163,29 @@ static int alloc_vmm(struct fh8626_kernel *k, const char *name, uint32_t need,
     memcpy(request + 12, &mem->size, sizeof(uint32_t));
     strncpy((char *)request + 28, name, 15);
     strncpy((char *)request + 44, "anonymous", 15);
-    if (call_ioctl(k->vmm_fd, FH8626_VMM_ALLOC, request)) {
+    rc = call_ioctl(vmm_fd, FH8626_VMM_ALLOC, request);
+    if (rc) {
         memset(mem, 0, sizeof(*mem));
-        return -EIO;
+        return rc;
     }
     memcpy(&mem->phys, request, sizeof(uint32_t));
-    mapped = map_phys(k->vmm_fd, mem->size, mem->phys);
+    mapped = map_phys(vmm_fd, mem->size, mem->phys);
     if (mapped == MAP_FAILED) {
+        rc = errno ? -errno : -EIO;
         memset(mem, 0, sizeof(*mem));
-        return -errno;
+        return rc;
     }
     memset(mapped, 0, mem->size);
     mem->virt = (uint32_t)(uintptr_t)mapped;
     return 0;
+}
+
+static int alloc_vmm(struct fh8626_kernel *k, const char *name, uint32_t need,
+                     struct fh8626_mem3 *mem)
+{
+    if (!k)
+        return -EINVAL;
+    return alloc_vmm_fd(k->vmm_fd, name, need, mem);
 }
 
 static void free_mem(struct fh8626_mem3 *mem)
@@ -172,6 +195,35 @@ static void free_mem(struct fh8626_mem3 *mem)
     if (mem->virt && mem->size)
         munmap((void *)(uintptr_t)mem->virt, mem->size);
     memset(mem, 0, sizeof(*mem));
+}
+
+static int release_vmm_owner(int fd)
+{
+    uint8_t reset_wire[0x68] = {0};
+    int first_error = 0;
+    int rc;
+
+    if (fd < 0)
+        return 0;
+    rc = call_ioctl(fd, FH8626_VMM_RESET_OWNER, reset_wire);
+    if (rc)
+        first_error = rc;
+    if (close(fd) < 0 && !first_error)
+        first_error = -errno;
+    return first_error;
+}
+
+static int release_osd_slot(struct fh8626_osd_slot *slot)
+{
+    int rc;
+
+    if (!slot)
+        return -EINVAL;
+    free_mem(&slot->mem);
+    rc = release_vmm_owner(slot->vmm_fd);
+    memset(slot, 0, sizeof(*slot));
+    slot->vmm_fd = -1;
+    return rc;
 }
 
 static void isp_regs_720p(volatile uint32_t *regs)
@@ -1841,6 +1893,11 @@ int fh8626_kernel_start(struct fh8626_kernel **out,
         return -ENOMEM;
     k->media_fd = k->isp_fd = k->pae_fd = k->vmm_fd = k->mem_fd = -1;
     k->jpeg_fd = -1;
+    {
+        unsigned i;
+        for (i = 0; i < FH8626_OSD_HW_SLOTS; ++i)
+            k->osd_slot[i].vmm_fd = -1;
+    }
     k->sink = sink;
     k->config = *config;
     k->lock_fd = -1;
@@ -1887,6 +1944,14 @@ int fh8626_kernel_stop(struct fh8626_kernel *k)
 
     if (!k)
         return -EINVAL;
+    {
+        unsigned i;
+        for (i = 0; i < FH8626_OSD_HW_SLOTS; ++i) {
+            rc = fh8626_kernel_osd_destroy(k, i);
+            if (rc && rc != -ENODEV && !first_error)
+                first_error = rc;
+        }
+    }
     if (k->jpeg_lock_ready) {
         rc = fh8626_kernel_jpeg_deinit(k);
         if (rc && !first_error)
@@ -1930,6 +1995,14 @@ int fh8626_kernel_stop(struct fh8626_kernel *k)
         pthread_mutex_destroy(&k->control_lock);
     if (k->jpeg_lock_ready)
         pthread_mutex_destroy(&k->jpeg_lock);
+    {
+        unsigned i;
+        for (i = 0; i < FH8626_OSD_HW_SLOTS; ++i) {
+            rc = release_osd_slot(&k->osd_slot[i]);
+            if (rc && !first_error)
+                first_error = rc;
+        }
+    }
     free(k);
     return first_error;
 }
@@ -2020,4 +2093,154 @@ int fh8626_kernel_set_mirror_flip(struct fh8626_kernel *k,
 
     pthread_mutex_unlock(&k->control_lock);
     return rc;
+}
+
+int fh8626_kernel_osd_set(struct fh8626_kernel *k, uint32_t id,
+    const hal_rect *rect, uint8_t opacity, const hal_bitmap *bitmap)
+{
+    struct fh8626_osd_slot next = {.vmm_fd = -1};
+    struct fh8626_osd_slot old = {.vmm_fd = -1};
+    struct fh8626_graphv2_logo logo;
+    uint32_t pub[FH8626_GRAPHV2_PUBLIC_WORDS];
+    uint32_t wire[FH8626_GRAPHV2_WIRE_WORDS];
+    uint32_t width, height, stride, need;
+    uint8_t *dst;
+    const uint8_t *src;
+    char name[16];
+    unsigned y;
+    int cleanup_rc;
+    int rc;
+
+    if (!k || !rect || !bitmap || !bitmap->data)
+        return -EINVAL;
+    if (id >= FH8626_OSD_HW_SLOTS)
+        return -ENOTSUP;
+    if (!k->running || k->isp_fd < 0 || !k->control_lock_ready)
+        return -ENODEV;
+    if (!bitmap->dim.width || !bitmap->dim.height ||
+        rect->width != bitmap->dim.width || rect->height != bitmap->dim.height)
+        return -EINVAL;
+
+    width = ((uint32_t)bitmap->dim.width + 1u) & ~1u;
+    height = ((uint32_t)bitmap->dim.height + 1u) & ~1u;
+    if ((uint32_t)rect->x + width > k->config.width ||
+        (uint32_t)rect->y + height > k->config.height)
+        return -ERANGE;
+    stride = (width * 2u + 7u) & ~7u;
+    need = stride * height;
+
+    next.vmm_fd = open("/dev/vmm_userdev", O_RDWR | O_CLOEXEC);
+    if (next.vmm_fd < 0)
+        return errno ? -errno : -EIO;
+    snprintf(name, sizeof(name), "div-osd%u", id);
+    rc = alloc_vmm_fd(next.vmm_fd, name, need, &next.mem);
+    if (rc)
+        goto fail;
+
+    dst = (uint8_t *)(uintptr_t)next.mem.virt;
+    src = (const uint8_t *)bitmap->data;
+    memset(dst, 0, need);
+    for (y = 0; y < bitmap->dim.height; ++y)
+        memcpy(dst + y * stride, src + y * bitmap->dim.width * 2u,
+            bitmap->dim.width * 2u);
+
+    logo = (struct fh8626_graphv2_logo){
+        .enable = 1u,
+        .graph_index = id,
+        .phys = next.mem.phys,
+        .opacity = opacity,
+        .x = rect->x,
+        .y = rect->y,
+        .width = width,
+        .height = height,
+        .stride = stride,
+    };
+    rc = fh8626_graphv2_build_logo(&logo, pub);
+    if (rc)
+        goto fail;
+    rc = fh8626_graphv2_public_to_wire(FH8626_GRAPHV2_MAIN_SELECTOR,
+        pub, wire);
+    if (rc)
+        goto fail;
+
+    next.width = width;
+    next.height = height;
+    next.stride = stride;
+    next.visible = 1;
+
+    pthread_mutex_lock(&k->control_lock);
+    if (!k->running || k->isp_fd < 0) {
+        pthread_mutex_unlock(&k->control_lock);
+        rc = -ENODEV;
+        goto fail;
+    }
+    rc = call_ioctl(k->isp_fd, FH8626_VPU_SET_LOGOV2, wire);
+    if (!rc) {
+        old = k->osd_slot[id];
+        k->osd_slot[id] = next;
+        next.vmm_fd = -1;
+        memset(&next.mem, 0, sizeof(next.mem));
+    }
+    pthread_mutex_unlock(&k->control_lock);
+    if (rc)
+        goto fail;
+
+    cleanup_rc = release_osd_slot(&old);
+    if (cleanup_rc)
+        HAL_WARNING("fh8626", "OSD %u old VMM owner cleanup failed: %#x\n",
+            id, cleanup_rc);
+    return 0;
+
+fail:
+    cleanup_rc = release_osd_slot(&next);
+    if (!rc)
+        rc = cleanup_rc;
+    return rc;
+}
+
+int fh8626_kernel_osd_destroy(struct fh8626_kernel *k, uint32_t id)
+{
+    struct fh8626_osd_slot old = {.vmm_fd = -1};
+    uint32_t pub[FH8626_GRAPHV2_PUBLIC_WORDS];
+    uint32_t wire[FH8626_GRAPHV2_WIRE_WORDS];
+    int cleanup_rc;
+    int rc;
+
+    if (!k)
+        return -EINVAL;
+    if (id >= FH8626_OSD_HW_SLOTS)
+        return -ENOTSUP;
+    if (!k->osd_slot[id].visible) {
+        if (k->osd_slot[id].vmm_fd >= 0)
+            return release_osd_slot(&k->osd_slot[id]);
+        return 0;
+    }
+    if (!k->running || k->isp_fd < 0 || !k->control_lock_ready)
+        return -ENODEV;
+
+    rc = fh8626_graphv2_build_disable(id, pub);
+    if (rc)
+        return rc;
+    rc = fh8626_graphv2_public_to_wire(FH8626_GRAPHV2_MAIN_SELECTOR,
+        pub, wire);
+    if (rc)
+        return rc;
+
+    pthread_mutex_lock(&k->control_lock);
+    if (!k->running || k->isp_fd < 0) {
+        pthread_mutex_unlock(&k->control_lock);
+        return -ENODEV;
+    }
+    rc = call_ioctl(k->isp_fd, FH8626_VPU_SET_LOGOV2, wire);
+    if (!rc) {
+        old = k->osd_slot[id];
+        memset(&k->osd_slot[id], 0, sizeof(k->osd_slot[id]));
+        k->osd_slot[id].vmm_fd = -1;
+    }
+    pthread_mutex_unlock(&k->control_lock);
+    if (rc)
+        return rc;
+
+    cleanup_rc = release_osd_slot(&old);
+    return cleanup_rc;
 }

@@ -46,3 +46,7 @@ int fh8626_kernel_jpeg_deinit_mode(struct fh8626_kernel *kernel, uint32_t mode);
 int fh8626_kernel_jpeg_deinit(struct fh8626_kernel *kernel);
 int fh8626_kernel_jpeg_get(struct fh8626_kernel *kernel, uint32_t width,
     uint32_t height, uint32_t quality, hal_jpegdata *jpeg);
+
+int fh8626_kernel_osd_set(struct fh8626_kernel *kernel, uint32_t id,
+    const hal_rect *rect, uint8_t opacity, const hal_bitmap *bitmap);
+int fh8626_kernel_osd_destroy(struct fh8626_kernel *kernel, uint32_t id);

@@ -3,6 +3,7 @@
 #include "fh8626_native_adapter.h"
 #include "fh8626_provider.h"
 #include "fh8626_native_runtime.h"
+#include "native/osd/fh8626_graphv2.h"
 #include "../types.h"
 
 #define FH8626_VENC_CHN_NUM 2
@@ -34,3 +35,7 @@ void fh8626_jpeg_deinit(void);
 void fh8626_jpeg_deinit_mode(uint32_t mode);
 int fh8626_jpeg_get(uint32_t width, uint32_t height, uint32_t quality,
     hal_jpegdata *jpeg);
+
+int fh8626_region_create(unsigned id, hal_rect rect, uint8_t opacity);
+int fh8626_region_setbitmap(unsigned id, const hal_bitmap *bitmap);
+int fh8626_region_destroy(unsigned id);

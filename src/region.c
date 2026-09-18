@@ -418,6 +418,14 @@ found_font:;
                             rk_region_setbitmap(id, &bitmap);
                             break;
 #elif defined(__arm__) && !defined(__ARM_PCS_VFP)
+                        case HAL_PLATFORM_FH8626: {
+                            int rc = fh8626_region_create(id, rect, osds[id].opal);
+                            if (!rc)
+                                rc = fh8626_region_setbitmap(id, &bitmap);
+                            if (rc)
+                                HAL_WARNING("region", "FH8626 OSD %d update failed: %#x\n", id, rc);
+                            break;
+                        }
                         case HAL_PLATFORM_GM:
                             gm_region_setbitmap(id, &bitmap);
                             gm_region_create(id, rect, osds[id].opal);
@@ -485,6 +493,14 @@ found_font:;
                                 rk_region_setbitmap(id, &bitmap);
                                 break;
 #elif defined(__arm__) && !defined(__ARM_PCS_VFP)
+                            case HAL_PLATFORM_FH8626: {
+                                int rc = fh8626_region_create(id, rect, osds[id].opal);
+                                if (!rc)
+                                    rc = fh8626_region_setbitmap(id, &bitmap);
+                                if (rc)
+                                    HAL_WARNING("region", "FH8626 OSD %d update failed: %#x\n", id, rc);
+                                break;
+                            }
                             case HAL_PLATFORM_GM:
                                 gm_region_create(id, rect, osds[id].opal);
                                 gm_region_setbitmap(id, &bitmap);
@@ -523,6 +539,12 @@ found_font:;
                         case HAL_PLATFORM_M6:  m6_region_destroy(id); break;
                         case HAL_PLATFORM_RK:  rk_region_destroy(id); break;
 #elif defined(__arm__) && !defined(__ARM_PCS_VFP)
+                        case HAL_PLATFORM_FH8626: {
+                            int rc = fh8626_region_destroy(id);
+                            if (rc)
+                                HAL_WARNING("region", "FH8626 OSD %d destroy failed: %#x\n", id, rc);
+                            break;
+                        }
                         case HAL_PLATFORM_GM:  gm_region_destroy(id); break;
                         case HAL_PLATFORM_V1:  v1_region_destroy(id); break;
                         case HAL_PLATFORM_V2:  v2_region_destroy(id); break;

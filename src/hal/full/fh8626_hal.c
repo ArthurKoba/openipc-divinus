@@ -20,6 +20,13 @@
 
 hal_chnstate fh8626_state[FH8626_VENC_CHN_NUM];
 
+struct fh8626_osd_request {
+    hal_rect rect;
+    uint8_t opacity;
+    int ready;
+};
+static struct fh8626_osd_request fh8626_osd_request[FH8626_OSD_HW_SLOTS];
+
 #ifdef FH8626_NATIVE_KERNEL
 static struct fh8626_kernel *kernel_context;
 #endif
@@ -202,6 +209,7 @@ int fh8626_sdk_start(fh8626_video_sink sink)
 
     if (kernel_context)
         return -EBUSY;
+    memset(fh8626_osd_request, 0, sizeof(fh8626_osd_request));
     if (app_config.mp4_width > UINT16_MAX ||
         app_config.mp4_height > UINT16_MAX ||
         app_config.mp4_fps > UINT8_MAX ||
@@ -458,5 +466,58 @@ int fh8626_sdk_stop(void)
     stub.lock_ready = 0;
     memset(fh8626_state, 0, sizeof(fh8626_state));
     return ret;
+#endif
+}
+
+int fh8626_region_create(unsigned id, hal_rect rect, uint8_t opacity)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (id >= FH8626_OSD_HW_SLOTS)
+        return -ENOTSUP;
+    if (!rect.width || !rect.height)
+        return -EINVAL;
+    fh8626_osd_request[id].rect = rect;
+    fh8626_osd_request[id].opacity = opacity;
+    fh8626_osd_request[id].ready = 1;
+    return 0;
+#else
+    (void)id; (void)rect; (void)opacity;
+    return -ENOTSUP;
+#endif
+}
+
+int fh8626_region_setbitmap(unsigned id, const hal_bitmap *bitmap)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    if (!kernel_context)
+        return -ENODEV;
+    if (id >= FH8626_OSD_HW_SLOTS)
+        return -ENOTSUP;
+    if (!fh8626_osd_request[id].ready)
+        return -EINVAL;
+    return fh8626_kernel_osd_set(kernel_context, id,
+        &fh8626_osd_request[id].rect, fh8626_osd_request[id].opacity,
+        bitmap);
+#else
+    (void)id; (void)bitmap;
+    return -ENOTSUP;
+#endif
+}
+
+int fh8626_region_destroy(unsigned id)
+{
+#ifdef FH8626_NATIVE_KERNEL
+    int rc;
+
+    if (id >= FH8626_OSD_HW_SLOTS)
+        return -ENOTSUP;
+    memset(&fh8626_osd_request[id], 0, sizeof(fh8626_osd_request[id]));
+    if (!kernel_context)
+        return 0;
+    rc = fh8626_kernel_osd_destroy(kernel_context, id);
+    return rc;
+#else
+    (void)id;
+    return -ENOTSUP;
 #endif
 }

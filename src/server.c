@@ -1,6 +1,7 @@
 #include "server.h"
 #include "hal/full/fh8626_audio.h"
 #include "hal/full/fh8626_contract.h"
+#include "hal/full/fh8626_hal.h"
 
 #define HTTP_MAX_CLIENTS 50
 #define HTTP_MIN_BUF_SIZE 4096
@@ -1708,6 +1709,10 @@ void respond_request(http_request_t *req) {
         short id = strtol(req->uri + 9, &remain, 10);
         if (remain == req->uri + 9 || id < 0 || id >= MAX_OSD) {
             send_http_error(req->clntFd, 404);
+            return;
+        }
+        if (plat == HAL_PLATFORM_FH8626 && id >= FH8626_OSD_HW_SLOTS) {
+            send_http_error(req->clntFd, 501);
             return;
         }
         if (EQUALS(req->method, "POST")) {
