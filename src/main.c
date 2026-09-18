@@ -21,13 +21,15 @@ char graceful = 0, keepRunning = 1;
 void handle_error(int signo) {
     char msg[64];
     sprintf(msg, "Error occured (%d)! Quitting...\n", signo);
-    write(STDERR_FILENO, msg, strlen(msg));
+    ssize_t ignored = write(STDERR_FILENO, msg, strlen(msg));
+    (void)ignored;
     keepRunning = 0;
     exit(EXIT_FAILURE);
 }
 
 void handle_exit(int signo) {
-    write(STDERR_FILENO, "Graceful shutdown...\n", 21);
+    ssize_t ignored = write(STDERR_FILENO, "Graceful shutdown...\n", 21);
+    (void)ignored;
     keepRunning = 0;
     graceful = 1;
 }
@@ -58,7 +60,8 @@ int main(int argc, char *argv[]) {
     if (!*family)
         HAL_ERROR("hal", "Unsupported chip family! Quitting...\n");
 
-    fprintf(stderr, "\033[0m\033[7m Divinus (rev %s) for %s \033[0m\n", GIT_REV, family);
+    fprintf(stderr, "\033[0m\033[7m Divinus (rev %s) for %s \033[0m\n",
+        GIT_REV, family);
     fprintf(stderr, "Chip ID: %s\n", chip);
 
     if (app_config_parse() != CONFIG_OK)
@@ -73,6 +76,8 @@ int main(int argc, char *argv[]) {
 
     if (app_config.rtsp_enable) {
         rtspHandle = rtsp_create(RTSP_MAXIMUM_CONNECTIONS, app_config.rtsp_port, 1);
+        if (!rtspHandle)
+            HAL_ERROR("rtsp", "Failed to start RTSP server!\n");
         HAL_INFO("rtsp", "Started listening for clients...\n");
         if (app_config.rtsp_enable_auth) {
             if (EMPTY(app_config.rtsp_auth_user) || EMPTY(app_config.rtsp_auth_pass))
@@ -120,7 +125,11 @@ int main(int argc, char *argv[]) {
     if (app_config.night_mode_enable)
         night_disable();
 
-    sdk_stop();
+    int sdk_stop_status = sdk_stop();
+    if (sdk_stop_status)
+        HAL_WARNING("hal",
+            "SDK shutdown returned %#x; automatic restart will be suppressed.\n",
+            sdk_stop_status);
 
     if (app_config.stream_enable)
         media_stop();
@@ -140,11 +149,13 @@ int main(int argc, char *argv[]) {
     if (!graceful)
         app_config_restore();
 
-    if (graceful) {
+    if (graceful && !sdk_stop_status) {
         fprintf(stderr, "Restarting...\n");
         execvp(argv[0], argv);
     }
+    if (graceful && sdk_stop_status)
+        fprintf(stderr, "Restart suppressed because media ownership did not stop cleanly.\n");
 
     fprintf(stderr, "Main thread is shutting down...\n");
-    return EXIT_SUCCESS;
+    return sdk_stop_status ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -1,4 +1,7 @@
 #include "server.h"
+#include "hal/full/fh8626_audio.h"
+#include "hal/full/fh8626_contract.h"
+#include "hal/full/fh8626_hal.h"
 
 #define HTTP_MAX_CLIENTS 50
 #define HTTP_MIN_BUF_SIZE 4096
@@ -8,6 +11,203 @@ IMPORT_STR(.rodata, "../res/index.html", indexhtml);
 extern const char indexhtml[];
 IMPORT_STR(.rodata, "../res/onvif/badauth.xml", badauthxml);
 extern const char badauthxml[];
+
+struct fh8626_api_video_cfg {
+    bool enable;
+    unsigned int width;
+    unsigned int height;
+    unsigned int fps;
+    unsigned int gop;
+    bool h265;
+    unsigned int mode;
+    unsigned int profile;
+    unsigned int bitrate;
+    unsigned int iqp;
+    unsigned int pqp;
+    unsigned int secondary_bitrate;
+    unsigned int extra_qp;
+};
+
+static void fh8626_api_video_from_app(struct fh8626_api_video_cfg *cfg)
+{
+    cfg->enable = app_config.mp4_enable;
+    cfg->width = app_config.mp4_width;
+    cfg->height = app_config.mp4_height;
+    cfg->fps = app_config.mp4_fps;
+    cfg->gop = app_config.mp4_gop;
+    cfg->h265 = app_config.mp4_codecH265;
+    cfg->mode = app_config.mp4_mode;
+    cfg->profile = app_config.mp4_profile;
+    cfg->bitrate = app_config.mp4_bitrate;
+    cfg->iqp = app_config.mp4_iqp;
+    cfg->pqp = app_config.mp4_pqp;
+    cfg->secondary_bitrate = app_config.mp4_secondary_bitrate;
+    cfg->extra_qp = app_config.mp4_extra_qp;
+}
+
+static void fh8626_api_video_to_app(const struct fh8626_api_video_cfg *cfg)
+{
+    app_config.mp4_enable = cfg->enable;
+    app_config.mp4_width = cfg->width;
+    app_config.mp4_height = cfg->height;
+    app_config.mp4_fps = cfg->fps;
+    app_config.mp4_gop = cfg->gop;
+    app_config.mp4_codecH265 = cfg->h265;
+    app_config.mp4_mode = cfg->mode;
+    app_config.mp4_profile = cfg->profile;
+    app_config.mp4_bitrate = cfg->bitrate;
+    app_config.mp4_iqp = cfg->iqp;
+    app_config.mp4_pqp = cfg->pqp;
+    app_config.mp4_secondary_bitrate = cfg->secondary_bitrate;
+    app_config.mp4_extra_qp = cfg->extra_qp;
+}
+
+static int fh8626_api_video_validate(const struct fh8626_api_video_cfg *cfg)
+{
+    hal_vidconfig wire;
+
+    if (!cfg || cfg->width > UINT16_MAX || cfg->height > UINT16_MAX ||
+        cfg->fps > UINT8_MAX || cfg->gop > UINT8_MAX ||
+        cfg->bitrate > UINT16_MAX ||
+        cfg->iqp > FH_PAE_MAX_QP || cfg->pqp > FH_PAE_MAX_QP ||
+        cfg->secondary_bitrate > UINT16_MAX || cfg->extra_qp > FH_PAE_MAX_QP)
+        return -ERANGE;
+
+    memset(&wire, 0, sizeof(wire));
+    wire.width = (uint16_t)cfg->width;
+    wire.height = (uint16_t)cfg->height;
+    wire.codec = cfg->h265 ? HAL_VIDCODEC_H265 : HAL_VIDCODEC_H264;
+    wire.mode = cfg->mode;
+    wire.profile = cfg->profile;
+    wire.gop = (uint8_t)cfg->gop;
+    wire.framerate = (uint8_t)cfg->fps;
+    wire.bitrate = (uint16_t)cfg->bitrate;
+    wire.minQual = (uint8_t)cfg->iqp;
+    wire.maxQual = (uint8_t)cfg->pqp;
+    return fh8626_video_contract_known(&wire) ? 0 : -ENOTSUP;
+}
+
+static void fh8626_api_video_disconnect_clients(void);
+
+static int fh8626_api_parse_u32(const char *value, unsigned int min,
+    unsigned int max, unsigned int *out)
+{
+    char *end = NULL;
+    unsigned long parsed;
+
+    if (!value || !*value || !out)
+        return -EINVAL;
+    errno = 0;
+    parsed = strtoul(value, &end, 10);
+    if (errno || end == value || *end || parsed < min || parsed > max)
+        return -ERANGE;
+    *out = (unsigned int)parsed;
+    return 0;
+}
+
+static int fh8626_api_jpeg_mjpeg_compatible(const struct AppConfig *cfg)
+{
+    if (!cfg)
+        return -EINVAL;
+    if (!cfg->jpeg_enable || !cfg->mjpeg_enable)
+        return 0;
+    if (cfg->jpeg_width > cfg->mjpeg_width ||
+        cfg->jpeg_height > cfg->mjpeg_height ||
+        cfg->jpeg_qfactor != cfg->mjpeg_qfactor)
+        return -ENOTSUP;
+    return 0;
+}
+
+static int fh8626_api_restore_runtime_state(void)
+{
+    int rc;
+
+    if (night_grayscale_on()) {
+        rc = fh8626_set_grayscale(1);
+        if (rc)
+            return rc;
+    }
+    region_invalidate_all();
+    media_capture_discontinuity();
+    return 0;
+}
+
+static int fh8626_api_restart_app_config(const struct AppConfig *next,
+    const struct AppConfig *old)
+{
+    int rc, rollback_rc;
+
+    if (!next || !old)
+        return -EINVAL;
+
+    media_capture_discontinuity();
+    fh8626_api_video_disconnect_clients();
+    app_config = *next;
+
+    rc = sdk_stop();
+    if (rc != EXIT_SUCCESS) {
+        app_config = *old;
+        return -EIO;
+    }
+
+    rc = sdk_start();
+    if (rc == EXIT_SUCCESS)
+        rc = fh8626_api_restore_runtime_state();
+    else
+        rc = -EIO;
+    if (!rc)
+        return 0;
+
+    if (fh8626_native_active() && sdk_stop() != EXIT_SUCCESS)
+        return -EUCLEAN;
+
+    app_config = *old;
+    rollback_rc = sdk_start();
+    if (rollback_rc != EXIT_SUCCESS)
+        return -EUCLEAN;
+    rollback_rc = fh8626_api_restore_runtime_state();
+    if (rollback_rc)
+        return -EUCLEAN;
+    return -EIO;
+}
+
+static int fh8626_api_video_restart(const struct fh8626_api_video_cfg *next,
+    const struct fh8626_api_video_cfg *old)
+{
+    int rc, rollback_rc;
+
+    media_capture_discontinuity();
+    fh8626_api_video_disconnect_clients();
+    fh8626_api_video_to_app(next);
+    rc = sdk_stop();
+    if (rc != EXIT_SUCCESS) {
+        fh8626_api_video_to_app(old);
+        return -EIO;
+    }
+
+    rc = sdk_start();
+    if (rc == EXIT_SUCCESS)
+        rc = fh8626_api_restore_runtime_state();
+    else
+        rc = -EIO;
+    if (!rc)
+        return 0;
+
+    /* A new owner may have started but failed to restore persistent media
+     * state (for example active night grayscale). Tear it down before
+     * rebuilding the previous configuration. */
+    if (fh8626_native_active() && sdk_stop() != EXIT_SUCCESS)
+        return -EUCLEAN;
+
+    fh8626_api_video_to_app(old);
+    rollback_rc = sdk_start();
+    if (rollback_rc != EXIT_SUCCESS)
+        return -EUCLEAN;
+    rollback_rc = fh8626_api_restore_runtime_state();
+    if (rollback_rc)
+        return -EUCLEAN;
+    return -EIO;
+}
 
 enum StreamType {
     STREAM_H26X,
@@ -77,6 +277,34 @@ static void close_socket_fd(int sockFd) {
     shutdown(sockFd, SHUT_RDWR);
     close(sockFd);
 }
+
+static void fh8626_api_video_disconnect_clients(void)
+{
+    unsigned int i;
+
+    /*
+     * A structural restart can change SPS/PPS, dimensions, profile and sample
+     * duration. HTTP elementary/fMP4/MJPEG sessions cannot safely carry their
+     * old decoder/mux state across that boundary. Force a reconnect so each
+     * consumer starts from the new random-access epoch.
+     */
+    pthread_mutex_lock(&client_fds_mutex);
+    for (i = 0; i < HTTP_MAX_CLIENTS; ++i) {
+        if (client_fds[i].sockFd < 0)
+            continue;
+        if (client_fds[i].type == STREAM_H26X ||
+            client_fds[i].type == STREAM_MP4 ||
+            client_fds[i].type == STREAM_MJPEG) {
+            close_socket_fd(client_fds[i].sockFd);
+            client_fds[i].sockFd = -1;
+            client_fds[i].type = -1;
+            client_fds[i].nalCnt = 0;
+            memset(&client_fds[i].mp4, 0, sizeof(client_fds[i].mp4));
+        }
+    }
+    pthread_mutex_unlock(&client_fds_mutex);
+}
+
 
 void free_client(int i) {
     if (client_fds[i].sockFd < 0) return;
@@ -192,7 +420,7 @@ void send_h26x_to_client(char index, hal_vidstream *stream) {
                     continue;
 
                 char len_buf[16];
-                int len_size = sprintf(len_buf, "%zX\r\n", pack->nalu[j].length);
+                int len_size = snprintf(len_buf, sizeof(len_buf), "%X\r\n", pack->nalu[j].length);
 
                 struct iovec iov[3];
                 iov[0].iov_base = len_buf;
@@ -252,7 +480,7 @@ void send_mp4_to_client(char index, hal_vidstream *stream, char isH265) {
                 struct BitBuf header_buf;
                 err = mp4_get_header(&header_buf);
                 chk_err_continue ssize_t len_size =
-                    sprintf(len_buf, "%zX\r\n", header_buf.offset);
+                    snprintf(len_buf, sizeof(len_buf), "%X\r\n", header_buf.offset);
                 if (send_to_client(i, len_buf, len_size) < 0)
                     continue;
                 if (send_to_client(i, header_buf.buf, header_buf.offset) < 0)
@@ -262,7 +490,8 @@ void send_mp4_to_client(char index, hal_vidstream *stream, char isH265) {
 
                 client_fds[i].mp4.sequence_number = 0;
                 client_fds[i].mp4.base_data_offset = header_buf.offset;
-                client_fds[i].mp4.base_media_decode_time = 0;
+                client_fds[i].mp4.video_media_decode_time = 0;
+                client_fds[i].mp4.audio_media_decode_time = 0;
                 client_fds[i].mp4.header_sent = true;
                 client_fds[i].mp4.nals_count = 0;
                 client_fds[i].mp4.default_sample_duration =
@@ -334,7 +563,7 @@ void send_pcm_to_client(hal_audframe *frame) {
         if (client_fds[i].type != STREAM_PCM) continue;
 
         char len_buf[50];
-        ssize_t len_size = sprintf(len_buf, "%zX\r\n", frame->length[0]);
+        ssize_t len_size = snprintf(len_buf, sizeof(len_buf), "%X\r\n", frame->length[0]);
         if (send_to_client(i, len_buf, len_size) < 0)
             continue; // send <SIZE>\r\n
         if (send_to_client(i, frame->data[0], frame->length[0]) < 0)
@@ -373,7 +602,7 @@ void send_jpeg_to_client(char index, char *buf, ssize_t size) {
         prefix_buf,
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: image/jpeg\r\n"
-        "Content-Length: %lu\r\n"
+        "Content-Length: %zd\r\n"
         "Connection: close\r\n\r\n", size);
     buf[size++] = '\r';
     buf[size++] = '\n';
@@ -421,7 +650,7 @@ void *send_jpeg_thread(void *vargp) {
     int buf_len = sprintf(
         buf, "HTTP/1.1 200 OK\r\n"
         "Content-Type: image/jpeg\r\n"
-        "Content-Length: %lu\r\n"
+        "Content-Length: %u\r\n"
         "Connection: close\r\n\r\n",
         jpeg.jpegSize);
     send_to_fd(task->client_fd, buf, buf_len);
@@ -864,7 +1093,95 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/audio")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            bool old_enable = app_config.audio_enable;
+            unsigned int old_bitrate = app_config.audio_bitrate;
+            int old_gain = app_config.audio_gain;
+            unsigned int old_srate = app_config.audio_srate;
+            bool next_enable = old_enable;
+            unsigned int next_bitrate = old_bitrate;
+            int next_gain = old_gain;
+            unsigned int next_srate = old_srate;
+            int rc;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key, *remain;
+                long parsed;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "enable")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        next_enable = true;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_enable = false;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    continue;
+                }
+
+                errno = 0;
+                parsed = strtol(value, &remain, 10);
+                if (errno || remain == value || *remain) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                if (EQUALS(key, "bitrate")) {
+                    if (parsed < 32 || parsed > 320) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_bitrate = (unsigned int)parsed;
+                } else if (EQUALS(key, "gain")) {
+                    if (parsed != 0) {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    next_gain = 0;
+                } else if (EQUALS(key, "srate")) {
+                    if (parsed != 8000) {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    next_srate = 8000u;
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            if (audioOn)
+                media_audio_disable();
+
+            app_config.audio_enable = next_enable;
+            app_config.audio_bitrate = next_bitrate;
+            app_config.audio_gain = next_gain;
+            app_config.audio_srate = next_srate;
+
+            rc = next_enable ? media_audio_enable() : EXIT_SUCCESS;
+            if (rc != EXIT_SUCCESS) {
+                if (audioOn)
+                    media_audio_disable();
+                app_config.audio_enable = old_enable;
+                app_config.audio_bitrate = old_bitrate;
+                app_config.audio_gain = old_gain;
+                app_config.audio_srate = old_srate;
+                if (old_enable && media_audio_enable() != EXIT_SUCCESS) {
+                    send_http_error(req->clntFd, 503);
+                    return;
+                }
+                send_http_error(req->clntFd, 500);
+                return;
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
@@ -944,7 +1261,87 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/isp")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            bool old_mirror = app_config.mirror;
+            bool old_flip = app_config.flip;
+            int old_antiflicker = app_config.antiflicker;
+            bool next_mirror = old_mirror;
+            bool next_flip = old_flip;
+            int next_antiflicker = old_antiflicker;
+            int orientation_changed = 0;
+            int antiflicker_changed = 0;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                char *remain;
+                int b;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "mirror") || EQUALS(key, "flip")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        b = 1;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        b = 0;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    if (EQUALS(key, "mirror"))
+                        next_mirror = b;
+                    else
+                        next_flip = b;
+                } else if (EQUALS(key, "antiflicker")) {
+                    long parsed;
+                    errno = 0;
+                    parsed = strtol(value, &remain, 10);
+                    if (errno || remain == value || *remain ||
+                        parsed < -1 || parsed > 60) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_antiflicker = parsed >= 60 ? 60 :
+                        parsed >= 50 ? 50 : 0;
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            orientation_changed =
+                next_mirror != old_mirror || next_flip != old_flip;
+            antiflicker_changed = next_antiflicker != old_antiflicker;
+
+            if (antiflicker_changed) {
+                int rc = fh8626_set_antiflicker(next_antiflicker);
+                if (rc) {
+                    send_http_error(req->clntFd, 500);
+                    return;
+                }
+            }
+            if (orientation_changed) {
+                int rc = fh8626_set_mirror_flip(next_mirror, next_flip);
+                if (rc) {
+                    if (antiflicker_changed &&
+                        fh8626_set_antiflicker(old_antiflicker)) {
+                        send_http_error(req->clntFd, 503);
+                        return;
+                    }
+                    send_http_error(req->clntFd, 500);
+                    return;
+                }
+            }
+
+            app_config.mirror = next_mirror;
+            app_config.flip = next_flip;
+            app_config.antiflicker = next_antiflicker;
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
@@ -980,7 +1377,70 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/jpeg")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            struct AppConfig old_app = app_config;
+            struct AppConfig next_app = app_config;
+            int changed = 0;
+            int rc;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                unsigned int parsed;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "width")) {
+                    rc = fh8626_api_parse_u32(value, 160u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.jpeg_width = parsed;
+                } else if (EQUALS(key, "height")) {
+                    rc = fh8626_api_parse_u32(value, 120u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.jpeg_height = parsed;
+                } else if (EQUALS(key, "qfactor")) {
+                    rc = fh8626_api_parse_u32(value, 1u, 99u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.jpeg_qfactor = parsed;
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            rc = fh8626_api_jpeg_mjpeg_compatible(&next_app);
+            if (rc) {
+                send_http_error(req->clntFd, 501);
+                return;
+            }
+            changed = next_app.jpeg_width != old_app.jpeg_width ||
+                next_app.jpeg_height != old_app.jpeg_height ||
+                next_app.jpeg_qfactor != old_app.jpeg_qfactor;
+
+            if (changed && next_app.jpeg_enable && !next_app.mjpeg_enable) {
+                rc = fh8626_api_restart_app_config(&next_app, &old_app);
+                if (rc) {
+                    send_http_error(req->clntFd, rc == -EUCLEAN ? 503 : 500);
+                    return;
+                }
+            } else {
+                app_config = next_app;
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
@@ -1020,7 +1480,105 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/mjpeg")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            struct AppConfig old_app = app_config;
+            struct AppConfig next_app = app_config;
+            int rc;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key;
+                unsigned int parsed;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                if (EQUALS(key, "enable")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        next_app.mjpeg_enable = true;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_app.mjpeg_enable = false;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                } else if (EQUALS(key, "width")) {
+                    rc = fh8626_api_parse_u32(value, 160u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_width = parsed;
+                } else if (EQUALS(key, "height")) {
+                    rc = fh8626_api_parse_u32(value, 120u, 2048u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_height = parsed;
+                } else if (EQUALS(key, "fps")) {
+                    rc = fh8626_api_parse_u32(value, 1u, 30u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_fps = parsed;
+                } else if (EQUALS(key, "bitrate")) {
+                    rc = fh8626_api_parse_u32(value, 32u, 65535u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_bitrate = parsed;
+                } else if (EQUALS(key, "qfactor")) {
+                    rc = fh8626_api_parse_u32(value, 1u, 99u, &parsed);
+                    if (rc) {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    next_app.mjpeg_qfactor = parsed;
+                } else if (EQUALS(key, "mode")) {
+                    if (EQUALS_CASE(value, "CBR"))
+                        next_app.mjpeg_mode = HAL_VIDMODE_CBR;
+                    else if (EQUALS_CASE(value, "VBR"))
+                        next_app.mjpeg_mode = HAL_VIDMODE_VBR;
+                    else if (EQUALS_CASE(value, "QP"))
+                        next_app.mjpeg_mode = HAL_VIDMODE_QP;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            rc = fh8626_api_jpeg_mjpeg_compatible(&next_app);
+            if (rc) {
+                send_http_error(req->clntFd, 501);
+                return;
+            }
+
+            if (memcmp(&next_app.mjpeg_enable, &old_app.mjpeg_enable,
+                       sizeof(next_app.mjpeg_enable)) ||
+                next_app.mjpeg_width != old_app.mjpeg_width ||
+                next_app.mjpeg_height != old_app.mjpeg_height ||
+                next_app.mjpeg_fps != old_app.mjpeg_fps ||
+                next_app.mjpeg_bitrate != old_app.mjpeg_bitrate ||
+                next_app.mjpeg_qfactor != old_app.mjpeg_qfactor ||
+                next_app.mjpeg_mode != old_app.mjpeg_mode) {
+                rc = fh8626_api_restart_app_config(&next_app, &old_app);
+                if (rc) {
+                    send_http_error(req->clntFd, rc == -EUCLEAN ? 503 : 500);
+                    return;
+                }
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
@@ -1088,7 +1646,150 @@ void respond_request(http_request_t *req) {
     }
 
     if (EQUALS(req->uri, "/api/mp4")) {
-        if (req->query) {
+        if (req->query && plat == HAL_PLATFORM_FH8626) {
+            struct fh8626_api_video_cfg old_cfg, next_cfg;
+            int structural_change = 0;
+            int bitrate_change = 0;
+            int enable_change = 0;
+
+            fh8626_api_video_from_app(&old_cfg);
+            next_cfg = old_cfg;
+
+            while (req->query) {
+                char *value = split(&req->query, "&");
+                char *key, *remain;
+                long parsed;
+
+                if (!value || !*value)
+                    continue;
+                unescape_uri(value);
+                key = split(&value, "=");
+                if (!key || !*key || !value || !*value)
+                    continue;
+
+                errno = 0;
+                if (EQUALS(key, "enable")) {
+                    if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
+                        next_cfg.enable = true;
+                    else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_cfg.enable = false;
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    enable_change = next_cfg.enable != old_cfg.enable;
+                    continue;
+                }
+                if (EQUALS(key, "h265")) {
+                    if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
+                        next_cfg.h265 = false;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    structural_change |= next_cfg.h265 != old_cfg.h265;
+                    continue;
+                }
+                if (EQUALS(key, "mode")) {
+                    if (EQUALS_CASE(value, "CBR"))
+                        next_cfg.mode = HAL_VIDMODE_CBR;
+                    else if (EQUALS_CASE(value, "VBR"))
+                        next_cfg.mode = HAL_VIDMODE_VBR;
+                    else if (EQUALS_CASE(value, "QP"))
+                        next_cfg.mode = HAL_VIDMODE_QP;
+                    else if (EQUALS_CASE(value, "AVBR"))
+                        next_cfg.mode = HAL_VIDMODE_AVBR;
+                    else if (EQUALS_CASE(value, "CVBR"))
+                        next_cfg.mode = HAL_VIDMODE_CVBR;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    structural_change |= next_cfg.mode != old_cfg.mode;
+                    continue;
+                }
+                if (EQUALS(key, "profile")) {
+                    if (EQUALS_CASE(value, "BP") || EQUALS_CASE(value, "BASELINE"))
+                        next_cfg.profile = HAL_VIDPROFILE_BASELINE;
+                    else if (EQUALS_CASE(value, "MP") || EQUALS_CASE(value, "MAIN"))
+                        next_cfg.profile = HAL_VIDPROFILE_MAIN;
+                    else {
+                        send_http_error(req->clntFd, 501);
+                        return;
+                    }
+                    structural_change |= next_cfg.profile != old_cfg.profile;
+                    continue;
+                }
+
+                parsed = strtol(value, &remain, 10);
+                if (errno || remain == value || *remain || parsed < 0) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+
+                if (EQUALS(key, "width")) {
+                    next_cfg.width = (unsigned int)parsed;
+                    structural_change |= next_cfg.width != old_cfg.width;
+                } else if (EQUALS(key, "height")) {
+                    next_cfg.height = (unsigned int)parsed;
+                    structural_change |= next_cfg.height != old_cfg.height;
+                } else if (EQUALS(key, "fps")) {
+                    next_cfg.fps = (unsigned int)parsed;
+                    structural_change |= next_cfg.fps != old_cfg.fps;
+                } else if (EQUALS(key, "gop")) {
+                    next_cfg.gop = (unsigned int)parsed;
+                    structural_change |= next_cfg.gop != old_cfg.gop;
+                } else if (EQUALS(key, "bitrate")) {
+                    next_cfg.bitrate = (unsigned int)parsed;
+                    bitrate_change = next_cfg.bitrate != old_cfg.bitrate;
+                } else if (EQUALS(key, "iqp")) {
+                    next_cfg.iqp = (unsigned int)parsed;
+                    structural_change |= next_cfg.iqp != old_cfg.iqp;
+                } else if (EQUALS(key, "pqp")) {
+                    next_cfg.pqp = (unsigned int)parsed;
+                    structural_change |= next_cfg.pqp != old_cfg.pqp;
+                } else if (EQUALS(key, "secondary_bitrate")) {
+                    next_cfg.secondary_bitrate = (unsigned int)parsed;
+                    structural_change |= next_cfg.secondary_bitrate != old_cfg.secondary_bitrate;
+                } else if (EQUALS(key, "extra_qp")) {
+                    next_cfg.extra_qp = (unsigned int)parsed;
+                    structural_change |= next_cfg.extra_qp != old_cfg.extra_qp;
+                } else {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+            }
+
+            {
+                int rc = fh8626_api_video_validate(&next_cfg);
+                if (rc) {
+                    send_http_error(req->clntFd, rc == -ENOTSUP ? 501 : 400);
+                    return;
+                }
+
+                if (!structural_change && bitrate_change &&
+                    (old_cfg.mode == HAL_VIDMODE_VBR ||
+                     old_cfg.mode == HAL_VIDMODE_AVBR)) {
+                    rc = fh8626_set_bitrate(next_cfg.bitrate);
+                    if (rc) {
+                        send_http_error(req->clntFd,
+                            rc == -EOPNOTSUPP ? 501 : 500);
+                        return;
+                    }
+                    app_config.mp4_bitrate = next_cfg.bitrate;
+                } else if (structural_change || bitrate_change) {
+                    rc = fh8626_api_video_restart(&next_cfg, &old_cfg);
+                    if (rc) {
+                        send_http_error(req->clntFd,
+                            rc == -EUCLEAN ? 503 : 500);
+                        return;
+                    }
+                }
+
+                if (enable_change)
+                    app_config.mp4_enable = next_cfg.enable;
+            }
+        } else if (req->query) {
             char *remain;
             while (req->query) {
                 char *value = split(&req->query, "&");
@@ -1113,10 +1814,30 @@ void respond_request(http_request_t *req) {
                     short result = strtol(value, &remain, 10);
                     if (remain != value)
                         app_config.mp4_fps = result;
+                } else if (EQUALS(key, "gop")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value)
+                        app_config.mp4_gop = result;
                 } else if (EQUALS(key, "bitrate")) {
                     short result = strtol(value, &remain, 10);
                     if (remain != value)
                         app_config.mp4_bitrate = result;
+                } else if (EQUALS(key, "iqp")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result >= 0 && result <= 51)
+                        app_config.mp4_iqp = (unsigned int)result;
+                } else if (EQUALS(key, "pqp")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result >= 0 && result <= 51)
+                        app_config.mp4_pqp = (unsigned int)result;
+                } else if (EQUALS(key, "secondary_bitrate")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result > 0)
+                        app_config.mp4_secondary_bitrate = (unsigned int)result;
+                } else if (EQUALS(key, "extra_qp")) {
+                    short result = strtol(value, &remain, 10);
+                    if (remain != value && result >= 0 && result <= 51)
+                        app_config.mp4_extra_qp = (unsigned int)result;
                 } else if (EQUALS(key, "h265")) {
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
                         app_config.mp4_codecH265 = 1;
@@ -1147,33 +1868,40 @@ void respond_request(http_request_t *req) {
             if (app_config.mp4_enable) media_mp4_enable();
         }
 
-        char h265[6] = "false";
-        char mode[5] = "\0";
-        char profile[3] = "\0";
-        if (app_config.mp4_codecH265)
-            strcpy(h265, "true");
-        switch (app_config.mp4_mode) {
-            case HAL_VIDMODE_CBR: strcpy(mode, "CBR"); break;
-            case HAL_VIDMODE_VBR: strcpy(mode, "VBR"); break;
-            case HAL_VIDMODE_QP: strcpy(mode, "QP"); break;
-            case HAL_VIDMODE_ABR: strcpy(mode, "ABR"); break;
-            case HAL_VIDMODE_AVBR: strcpy(mode, "AVBR"); break;
+        {
+            char h265[6] = "false";
+            char mode[5] = "\0";
+            char profile[3] = "\0";
+            if (app_config.mp4_codecH265)
+                strcpy(h265, "true");
+            switch (app_config.mp4_mode) {
+                case HAL_VIDMODE_CBR: strcpy(mode, "CBR"); break;
+                case HAL_VIDMODE_VBR: strcpy(mode, "VBR"); break;
+                case HAL_VIDMODE_QP: strcpy(mode, "QP"); break;
+                case HAL_VIDMODE_ABR: strcpy(mode, "ABR"); break;
+                case HAL_VIDMODE_AVBR: strcpy(mode, "AVBR"); break;
+                case HAL_VIDMODE_CVBR: strcpy(mode, "CVBR"); break;
+            }
+            switch (app_config.mp4_profile) {
+                case HAL_VIDPROFILE_BASELINE: strcpy(profile, "BP"); break;
+                case HAL_VIDPROFILE_MAIN: strcpy(profile, "MP"); break;
+                case HAL_VIDPROFILE_HIGH: strcpy(profile, "HP"); break;
+            }
+            respLen = sprintf(response,
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json;charset=UTF-8\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+                "{\"enable\":%s,\"width\":%d,\"height\":%d,\"fps\":%d,\"gop\":%d,"
+                "\"h265\":%s,\"mode\":\"%s\",\"profile\":\"%s\",\"bitrate\":%d,"
+                "\"iqp\":%d,\"pqp\":%d,\"secondary_bitrate\":%d,\"extra_qp\":%d}",
+                app_config.mp4_enable ? "true" : "false",
+                app_config.mp4_width, app_config.mp4_height,
+                app_config.mp4_fps, app_config.mp4_gop, h265, mode, profile,
+                app_config.mp4_bitrate, app_config.mp4_iqp, app_config.mp4_pqp,
+                app_config.mp4_secondary_bitrate, app_config.mp4_extra_qp);
+            send_and_close(req->clntFd, response, respLen);
         }
-        switch (app_config.mp4_profile) {
-            case HAL_VIDPROFILE_BASELINE: strcpy(profile, "BP"); break;
-            case HAL_VIDPROFILE_MAIN: strcpy(profile, "MP"); break;
-            case HAL_VIDPROFILE_HIGH: strcpy(profile, "HP"); break;
-        }
-        respLen = sprintf(response,
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: application/json;charset=UTF-8\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-            "{\"enable\":%s,\"width\":%d,\"height\":%d,\"fps\":%d,\"gop\":%d,"
-            "\"h265\":%s,\"mode\":\"%s\",\"profile\":\"%s\",\"bitrate\":%d}",
-            app_config.mp4_enable ? "true" : "false", app_config.mp4_width, app_config.mp4_height,
-            app_config.mp4_fps, app_config.mp4_gop, h265, mode, profile, app_config.mp4_bitrate);
-        send_and_close(req->clntFd, response, respLen);
         return;
     }
 
@@ -1198,10 +1926,19 @@ void respond_request(http_request_t *req) {
                     if (remain != value)
                         app_config.adc_threshold = result;
                 } else if (EQUALS(key, "grayscale")) {
+                    int rc;
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
-                        night_grayscale(1);
+                        rc = night_grayscale(1);
                     else if (EQUALS_CASE(value, "false") || EQUALS(value, "0"))
-                        night_grayscale(0);
+                        rc = night_grayscale(0);
+                    else {
+                        send_http_error(req->clntFd, 400);
+                        return;
+                    }
+                    if (rc != EXIT_SUCCESS) {
+                        send_http_error(req->clntFd, 500);
+                        return;
+                    }
                 } else if (EQUALS(key, "ircut")) {
                     if (EQUALS_CASE(value, "true") || EQUALS(value, "1"))
                         night_ircut(1);
@@ -1263,31 +2000,68 @@ void respond_request(http_request_t *req) {
             send_http_error(req->clntFd, 404);
             return;
         }
+        if (plat == HAL_PLATFORM_FH8626 && id >= FH8626_OSD_HW_SLOTS) {
+            send_http_error(req->clntFd, 501);
+            return;
+        }
         if (EQUALS(req->method, "POST")) {
             char *type = request_header("Content-Type");
             if (STARTS_WITH(type, "multipart/form-data")) {
-                char *bound = strstr(type, "boundary=") + strlen("boundary=");
+                char *boundary_pos = strstr(type, "boundary=");
+                char *bound;
+
+                if (!boundary_pos || !req->payload) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                bound = boundary_pos + strlen("boundary=");
 
                 char *payloadb = strstr(req->payload, bound);
-                payloadb = memstr(payloadb, "\r\n\r\n", req->total - (payloadb - req->input), 4);
-                if (payloadb) payloadb += 4;
+                if (!payloadb) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                payloadb = memstr(payloadb, "\r\n\r\n",
+                    req->total - (payloadb - req->input), 4);
+                if (!payloadb) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                payloadb += 4;
 
                 char *payloade = memstr(payloadb, bound,
                     req->total - (payloadb - req->input), strlen(bound));
-                if (payloade) payloade -= 4;
+                if (!payloade || payloade < payloadb + 4) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
+                payloade -= 4;
+                if (payloade <= payloadb) {
+                    send_http_error(req->clntFd, 400);
+                    return;
+                }
 
                 char path[32];
+                size_t payload_len = (size_t)(payloade - payloadb);
 
-                if (!memcmp(payloadb, "\x89\x50\x4E\x47\xD\xA\x1A\xA", 8))
+                if (payload_len >= 8 &&
+                    !memcmp(payloadb, "\x89\x50\x4E\x47\xD\xA\x1A\xA", 8))
                     sprintf(path, "/tmp/osd%d.png", id);
                 else
                     sprintf(path, "/tmp/osd%d.bmp", id);
 
                 FILE *img = fopen(path, "wb");
-                fwrite(payloadb, sizeof(char), payloade - payloadb, img);
+                if (!img || fwrite(payloadb, 1, payload_len, img) != payload_len) {
+                    if (img)
+                        fclose(img);
+                    send_http_error(req->clntFd, 500);
+                    return;
+                }
                 fclose(img);
 
-                strcpy(osds[id].text, "");
+                osds[id].text[0] = '\0';
+                strncpy(osds[id].img, path, sizeof(osds[id].img) - 1);
+                osds[id].img[sizeof(osds[id].img) - 1] = '\0';
                 osds[id].updt = 1;
             } else {
                 respLen = sprintf(response,
@@ -1443,26 +2217,166 @@ void respond_request(http_request_t *req) {
 
     if (EQUALS(req->uri, "/api/status")) {
         struct sysinfo si;
-        sysinfo(&si);
-        char memory[16], uptime[48];
-        short free = (si.freeram + si.bufferram) / 1024 / 1024;
-        short total = si.totalram / 1024 / 1024;
-        sprintf(memory, "%d/%dMB", total - free, total);
+        uint64_t mem_unit, total_bytes, available_bytes, used_bytes;
+        unsigned int enabled_channels = 0, main_channels = 0;
+        unsigned int h264_channels = 0, h265_channels = 0;
+        unsigned int jpeg_channels = 0, mjpeg_channels = 0;
+        char memory[32], uptime[48], temp_text[32], temp_json[32];
+        char media_json[768], capabilities_json[1024];
+        bool temp_available;
+        long cpu_online;
+
+        memset(&si, 0, sizeof(si));
+        (void)sysinfo(&si);
+        mem_unit = si.mem_unit ? si.mem_unit : 1u;
+        total_bytes = (uint64_t)si.totalram * mem_unit;
+        available_bytes = ((uint64_t)si.freeram + si.bufferram) * mem_unit;
+        if (available_bytes > total_bytes)
+            available_bytes = total_bytes;
+        used_bytes = total_bytes - available_bytes;
+        snprintf(memory, sizeof(memory), "%llu/%lluMB",
+            (unsigned long long)(used_bytes / (1024u * 1024u)),
+            (unsigned long long)(total_bytes / (1024u * 1024u)));
+
         if (si.uptime > 86400)
-            sprintf(uptime, "%ld days, %ld:%02ld:%02ld", si.uptime / 86400, (si.uptime % 86400) / 3600, (si.uptime % 3600) / 60, si.uptime % 60);
+            snprintf(uptime, sizeof(uptime), "%ld days, %ld:%02ld:%02ld",
+                si.uptime / 86400, (si.uptime % 86400) / 3600,
+                (si.uptime % 3600) / 60, si.uptime % 60);
         else if (si.uptime > 3600)
-            sprintf(uptime, "%ld:%02ld:%02ld", si.uptime / 3600, (si.uptime % 3600) / 60, si.uptime % 60);
+            snprintf(uptime, sizeof(uptime), "%ld:%02ld:%02ld",
+                si.uptime / 3600, (si.uptime % 3600) / 60, si.uptime % 60);
         else
-            sprintf(uptime, "%ld:%02ld", si.uptime / 60, si.uptime % 60);
-        respLen = sprintf(response,
+            snprintf(uptime, sizeof(uptime), "%ld:%02ld",
+                si.uptime / 60, si.uptime % 60);
+
+        cpu_online = sysconf(_SC_NPROCESSORS_ONLN);
+        if (cpu_online < 1)
+            cpu_online = 1;
+
+        if (chnState) {
+            for (int i = 0; i < chnCount; ++i) {
+                if (!chnState[i].enable)
+                    continue;
+                enabled_channels++;
+                if (chnState[i].mainLoop)
+                    main_channels++;
+                switch (chnState[i].payload) {
+                    case HAL_VIDCODEC_H264: h264_channels++; break;
+                    case HAL_VIDCODEC_H265: h265_channels++; break;
+                    case HAL_VIDCODEC_JPG: jpeg_channels++; break;
+                    case HAL_VIDCODEC_MJPG: mjpeg_channels++; break;
+                    default: break;
+                }
+            }
+        }
+
+        temp_available = hal_temperature_available();
+        if (temp_available) {
+            float temperature = hal_temperature_read();
+            if (temperature == temperature) {
+                snprintf(temp_text, sizeof(temp_text), "%.1f\u00B0C", temperature);
+                snprintf(temp_json, sizeof(temp_json), "%.2f", temperature);
+            } else {
+                temp_available = false;
+            }
+        }
+        if (!temp_available) {
+            strcpy(temp_text, "unsupported");
+            strcpy(temp_json, "null");
+        }
+
+        if (plat == HAL_PLATFORM_FH8626) {
+            struct fh8626_provider_status provider;
+            struct fh8626_capabilities caps = fh8626_capabilities_current();
+            memset(&provider, 0, sizeof(provider));
+            if (fh8626_provider_get_status(&provider)) {
+                provider.name = "unknown";
+                provider.blockers = FH8626_BLOCKER_PROVIDER_UNAVAILABLE;
+            }
+            snprintf(media_json, sizeof(media_json),
+                "{\"backend\":\"%s\",\"native_active\":%s,\"production_ready\":%s,"
+                "\"audio_capture\":%s,\"audio_error\":%d,\"audio_capture_rate\":8000,"
+                "\"audio_gain_control\":false,\"blockers\":%u,\"channels_total\":%u,\"channels_enabled\":%u,"
+                "\"channels_mainloop\":%u,\"encoders\":{\"h264\":%u,\"h265\":%u,"
+                "\"jpeg\":%u,\"mjpeg\":%u}}",
+                provider.name ? provider.name : "unknown",
+                fh8626_native_active() ? "true" : "false",
+                provider.production ? "true" : "false",
+                fh8626_audio_running() ? "true" : "false",
+                fh8626_audio_last_error(), provider.blockers,
+                (unsigned int)(unsigned char)chnCount, enabled_channels,
+                main_channels, h264_channels, h265_channels, jpeg_channels,
+                mjpeg_channels);
+            snprintf(capabilities_json, sizeof(capabilities_json),
+                "{\"h264_720p25\":\"%s\",\"stream_lease_release\":\"%s\","
+                "\"sensor_gc1054_init_order\":\"%s\",\"sensor_open_backend\":\"%s\","
+                "\"isp_direct_kernel_bringup\":\"%s\","
+                "\"same_boot_full_teardown\":\"%s\",\"force_idr\":\"%s\","
+                "\"rate_control_mapping\":\"%s\",\"vpss_1080p_scaling\":\"%s\","
+                "\"h265\":\"%s\",\"jpeg_snapshot\":\"%s\",\"mjpeg\":\"%s\","
+                "\"audio_rtx_transport\":\"%s\",\"audio\":\"%s\","
+                "\"runtime_audio_reconfigure\":\"%s\","
+                "\"runtime_video_reconfigure\":\"%s\","
+                "\"osd_graphv2\":\"%s\","
+                "\"grayscale_shared_context\":\"%s\","
+                "\"antiflicker\":\"%s\","
+                "\"night_board_wiring\":\"%s\",\"temperature\":\"%s\"}",
+                fh8626_capability_state_name(caps.h264_720p25),
+                fh8626_capability_state_name(caps.stream_lease_release),
+                fh8626_capability_state_name(caps.sensor_gc1054_init_order),
+                fh8626_capability_state_name(caps.sensor_open_backend),
+                fh8626_capability_state_name(caps.isp_direct_kernel_bringup),
+                fh8626_capability_state_name(caps.same_boot_full_teardown),
+                fh8626_capability_state_name(caps.idr_request),
+                fh8626_capability_state_name(caps.rate_control_mapping),
+                fh8626_capability_state_name(caps.vpss_1080p_scaling),
+                fh8626_capability_state_name(caps.h265),
+                fh8626_capability_state_name(caps.jpeg_snapshot),
+                fh8626_capability_state_name(caps.mjpeg),
+                fh8626_capability_state_name(caps.audio_rtx_transport),
+                fh8626_capability_state_name(caps.audio),
+                fh8626_capability_state_name(caps.runtime_audio_reconfigure),
+                fh8626_capability_state_name(caps.runtime_video_reconfigure),
+                fh8626_capability_state_name(caps.osd_graphv2),
+                fh8626_capability_state_name(caps.grayscale_shared_context),
+                fh8626_capability_state_name(caps.antiflicker),
+                fh8626_capability_state_name(caps.night_board_wiring),
+                fh8626_capability_state_name(caps.temperature));
+        } else {
+            snprintf(media_json, sizeof(media_json),
+                "{\"backend\":\"hal\",\"native_active\":%s,"
+                "\"channels_total\":%u,\"channels_enabled\":%u,\"channels_mainloop\":%u,"
+                "\"encoders\":{\"h264\":%u,\"h265\":%u,\"jpeg\":%u,\"mjpeg\":%u}}",
+                enabled_channels ? "true" : "false",
+                (unsigned int)(unsigned char)chnCount, enabled_channels,
+                main_channels, h264_channels, h265_channels, jpeg_channels,
+                mjpeg_channels);
+            strcpy(capabilities_json, "{}");
+        }
+
+        respLen = snprintf(response, sizeof(response),
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: application/json;charset=UTF-8\r\n"
             "Connection: close\r\n"
             "\r\n"
-            "{\"chip\":\"%s\",\"loadavg\":[%.2f,%.2f,%.2f],\"memory\":\"%s\","
-            "\"sensor\":\"%s\",\"temp\":\"%.1f\u00B0C\",\"uptime\":\"%s\"}",
-            chip, si.loads[0] / 65536.0, si.loads[1] / 65536.0, si.loads[2] / 65536.0,
-            memory, sensor, hal_temperature_read(), uptime);
+            "{\"chip\":\"%s\",\"family\":\"%s\",\"platform\":\"%s\","
+            "\"cpu\":{\"online\":%ld},"
+            "\"loadavg\":[%.2f,%.2f,%.2f],\"memory\":\"%s\","
+            "\"memory_bytes\":{\"used\":%llu,\"available\":%llu,\"total\":%llu},"
+            "\"sensor\":\"%s\",\"temp\":\"%s\","
+            "\"temperature_available\":%s,\"temperature_c\":%s,"
+            "\"uptime\":\"%s\",\"uptime_seconds\":%ld,"
+            "\"media\":%s,\"capabilities\":%s}",
+            chip, family, hal_platform_name(), cpu_online,
+            si.loads[0] / 65536.0, si.loads[1] / 65536.0, si.loads[2] / 65536.0,
+            memory, (unsigned long long)used_bytes,
+            (unsigned long long)available_bytes, (unsigned long long)total_bytes,
+            sensor, temp_text, temp_available ? "true" : "false", temp_json,
+            uptime, si.uptime, media_json, capabilities_json);
+        if (respLen < 0 || (size_t)respLen >= sizeof(response)) {
+            send_http_error(req->clntFd, 500);
+            return;
+        }
         send_and_close(req->clntFd, response, respLen);
         return;
     }

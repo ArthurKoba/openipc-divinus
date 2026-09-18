@@ -18,6 +18,48 @@ float lastReadTemp = 0.0 / 0.0;
 
 void hal_identify(void) {
     unsigned int val = 0;
+
+    if (fh8626_hal_stub_enabled()) {
+        plat = HAL_PLATFORM_FH8626;
+        strcpy(chip, "FH8626V100");
+        strcpy(family, "fullhan-fh8626-stub");
+        chnCount = FH8626_VENC_CHN_NUM;
+        chnState = fh8626_state;
+        aud_thread = NULL;
+        isp_thread = NULL;
+        vid_thread = NULL;
+        return;
+    }
+#ifdef FH8626_NATIVE_KERNEL
+    {
+        FILE *machine = fopen("/sys/devices/soc0/machine", "r");
+        char name[64] = {0};
+        if (machine) {
+            if (!fgets(name, sizeof(name), machine))
+                name[0] = 0;
+            fclose(machine);
+        }
+        if (!strstr(name, "FH8626V100")) {
+            machine = fopen("/proc/cpuinfo", "r");
+            while (machine && fgets(name, sizeof(name), machine))
+                if (strstr(name, "FH8626V100"))
+                    break;
+            if (machine)
+                fclose(machine);
+        }
+        if (strstr(name, "FH8626V100")) {
+            plat = HAL_PLATFORM_FH8626;
+            strcpy(chip, "FH8626V100");
+            strcpy(family, "fullhan-fh8626");
+            chnCount = FH8626_VENC_CHN_NUM;
+            chnState = fh8626_state;
+            aud_thread = NULL;
+            isp_thread = NULL;
+            vid_thread = NULL;
+            return;
+        }
+    }
+#endif
     FILE *file;
     char *endMark, line[200] = {0};
 
@@ -323,8 +365,51 @@ void hal_identify(void) {
 #endif
 }
 
+const char *hal_platform_name(void) {
+    switch (plat) {
+        case HAL_PLATFORM_AK: return "anyka";
+        case HAL_PLATFORM_CVI: return "cvitek";
+        case HAL_PLATFORM_GM: return "grainmedia";
+        case HAL_PLATFORM_I3: return "infinity3";
+        case HAL_PLATFORM_I6: return "infinity6";
+        case HAL_PLATFORM_I6C: return "infinity6c";
+        case HAL_PLATFORM_M6: return "mercury6";
+        case HAL_PLATFORM_RK: return "rockchip";
+        case HAL_PLATFORM_T31: return "ingenic-t31";
+        case HAL_PLATFORM_V1: return "hisi-v1";
+        case HAL_PLATFORM_V2: return "hisi-v2";
+        case HAL_PLATFORM_V3: return "hisi-v3";
+        case HAL_PLATFORM_V4: return "hisi-v4";
+        case HAL_PLATFORM_FH8626: return "fh8626v100";
+        default: return "unknown";
+    }
+}
+
+bool hal_temperature_available(void) {
+    if (plat == HAL_PLATFORM_FH8626)
+        return false;
+
+    switch (plat) {
+#if defined(__ARM_PCS_VFP)
+        case HAL_PLATFORM_I6:
+        case HAL_PLATFORM_I6C:
+        case HAL_PLATFORM_M6:
+            return access("/sys/class/mstar/msys/TEMP_R", R_OK) == 0;
+#elif defined(__arm__) && !defined(__ARM_PCS_VFP)
+        case HAL_PLATFORM_V2:
+        case HAL_PLATFORM_V3:
+        case HAL_PLATFORM_V4:
+            return true;
+#endif
+        default:
+            return access("/sys/class/thermal/thermal_zone0/temp", R_OK) == 0;
+    }
+}
+
 float hal_temperature_read(void) {
-    if (lastReadTemp != (0.0 / 0.0) && (millis() - lastMillisTemp < 5000))
+    if (plat == HAL_PLATFORM_FH8626)
+        return 0.0f / 0.0f;
+    if (lastReadTemp == lastReadTemp && (millis() - lastMillisTemp < 5000))
         return lastReadTemp;
 
     lastMillisTemp = millis();
@@ -355,11 +440,14 @@ float hal_temperature_read(void) {
                 FILE* file;
                 char line[10] = {0};
                 if (file = fopen("/sys/class/thermal/thermal_zone0/temp", "r")) {
-                    fgets(line, 10, file);
-                    lastReadTemp = strtof(line, NULL) / 1000.0;
+                    if (fgets(line, sizeof(line), file))
+                        lastReadTemp = strtof(line, NULL) / 1000.0;
                     fclose(file);
                 }
-            } else lastMillisTemp = UINT64_MAX;
+            } else {
+                lastReadTemp = 0.0f / 0.0f;
+                lastMillisTemp = UINT64_MAX;
+            }
             break;
     }
 

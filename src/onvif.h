@@ -11,7 +11,7 @@
 int start_onvif(void);
 void stop_onvif(void);
 
-void *onvif_thread();
+void *onvif_thread(void *arg);
 
 char* onvif_extract_soap_action(const char* soap_data);
 bool onvif_validate_soap_auth(const char *soap_data);

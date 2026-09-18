@@ -45,9 +45,17 @@ In spite of these design choices, Divinus boasts numerous features that cater to
 | infinity6e[^15]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | infinity6c[^16]         | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
 | mercury6[^17]           | ✔️           | ✔️           | ✔️          | ✔️          | ✔️                |
+| FH8626V100              | ↻            | ↻             | ↻           | ↻           | ↻                  |
 | sun8iw21p1[^18]         | ↻            | ↻            | ↻           | ↻           | ↻                 |
 
 _✔️ - supported, ↻ - in development, ✗ - unsupported, ⁿ/ₐ - not supported by hardware_
+
+FH8626V100 uses the native Fullhan HAL in `src/hal/full/`. Divinus owns the
+sensor/ISP/media/VENC path directly; the former external FH86 H.264 owner/socket
+frontend is retired. RTX microphone capture is owned directly by the Fullhan
+HAL through `/dev/rtxbus`; speaker/amplifier GPIO policy is intentionally not
+part of the platform backend. Board-specific lens, illumination, reset and PTZ
+policy stays outside Divinus.
 
 _* At the moment, text, RGB or bitfield bitmaps and PNG overlays are handled, more matricial formats and covers are to follow_
 

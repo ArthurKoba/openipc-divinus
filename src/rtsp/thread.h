@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <errno.h>
 #include <pthread.h>
 
 #include "common.h"
@@ -489,7 +490,8 @@ static inline int threadpool_add(threadpool_handle h,thread_handle threadp)
     }
 
     memcpy(tmp,threadp->name,MAX_THREADNAME);
-    snprintf(threadp->name, MAX_THREADNAME,"%s:%d",tmp,h->cnt);
+    snprintf(threadp->name, MAX_THREADNAME, "%.*s:%d",
+        MAX_THREADNAME - 13, tmp, h->cnt);
 
     threadp->sharedp = h->sharedp;
     h->threads[(h->cnt)++] = threadp;
@@ -570,29 +572,40 @@ static inline void thread_sync_init(thread_handle h)
 
 static inline int start_thread(thread_handle threadp)
 {
-    struct sched_param  schedParam;
+    struct sched_param schedParam;
     pthread_attr_t attr;
+    int create_result;
 
     DASSERT(threadp->fxn,return FAILURE);
     DASSERT(threadp->sharedp,return FAILURE);
 
-    /* Initialize the thread attributes */
-    ASSERT(pthread_attr_init(&attr) == 0, return FAILURE);
+    if (pthread_attr_init(&attr) != 0)
+        return FAILURE;
 
-    /* Force the thread to use custom scheduling attributes */
-    ASSERT(pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED) == 0,
-           return FAILURE);
-
-    /* Set the thread to be fifo real time scheduled */
-    ASSERT(pthread_attr_setschedpolicy(&attr, SCHED_FIFO) == 0,
-            return FAILURE);
+    if (pthread_attr_setinheritsched(&attr, PTHREAD_EXPLICIT_SCHED) != 0 ||
+        pthread_attr_setschedpolicy(&attr, SCHED_FIFO) != 0) {
+        pthread_attr_destroy(&attr);
+        return FAILURE;
+    }
 
     schedParam.sched_priority = threadp->priority;
-    ASSERT(pthread_attr_setschedparam(&attr, &schedParam) == 0,
-            return FAILURE);
+    if (pthread_attr_setschedparam(&attr, &schedParam) != 0) {
+        pthread_attr_destroy(&attr);
+        return FAILURE;
+    }
 
-    ASSERT(pthread_create(&threadp->pthread, &attr, threadp->fxn, threadp) == 0,
-            return FAILURE);
+    create_result = pthread_create(&threadp->pthread, &attr,
+        threadp->fxn, threadp);
+    pthread_attr_destroy(&attr);
+
+    if (create_result == EPERM)
+        create_result = pthread_create(&threadp->pthread, NULL,
+            threadp->fxn, threadp);
+
+    if (create_result != 0) {
+        ERR("pthread_create failed: %s\n", strerror(create_result));
+        return FAILURE;
+    }
 
     threadp->started = TRUE;
 

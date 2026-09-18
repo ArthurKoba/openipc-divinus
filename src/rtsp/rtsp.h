@@ -6,6 +6,7 @@
 #include <arpa/inet.h>
 
 #include "rtsp_server.h"
+#include "tcp_input.h"
 
 #include "common.h"
 #include "rfc.h"
@@ -13,6 +14,7 @@
 #include "thread.h"
 #include "bufpool.h"
 #include "mime.h"
+#include "../stream_send.h"
 
 /******************************************************************************
  *              DEFINITIONS
@@ -96,6 +98,7 @@ typedef struct {
 } transport_t;
 
 struct connection_item_t {
+    struct rtsp_tcp_input input;
     struct sockaddr_in addr;
     FILE *fp_tcp_read;
     FILE *fp_tcp_write;

@@ -17,7 +17,9 @@ static inline void app_config_open(FILE **file, const char *flags) {
         if (!access(conf_path, F_OK)) {
             if (*flags == 'w') {
                 char bak_path[PATH_MAX];
-                sprintf(bak_path, "%s.bak", conf_path);
+                if (snprintf(bak_path, sizeof(bak_path), "%s.bak", conf_path) >=
+                        (int)sizeof(bak_path))
+                    return;
                 remove(bak_path);
                 rename(conf_path, bak_path);
             }
@@ -30,7 +32,9 @@ static inline void app_config_open(FILE **file, const char *flags) {
         if (access(*path++, F_OK)) continue;
         if (*flags == 'w') {
             char bak_path[PATH_MAX];
-            sprintf(bak_path, "%s.bak", *(path - 1));
+            if (snprintf(bak_path, sizeof(bak_path), "%s.bak", *(path - 1)) >=
+                    (int)sizeof(bak_path))
+                return;
             remove(bak_path);
             rename(*(path - 1), bak_path);
         }
@@ -47,7 +51,9 @@ void app_config_restore(void) {
         char bak_path[PATH_MAX], *dir = dirname(exe_path);
         exe_path[exe_len] = '\0';
         snprintf(conf_path, sizeof(conf_path), "%s/divinus.yaml", dir);
-        sprintf(bak_path, "%s.bak", conf_path);
+        if (snprintf(bak_path, sizeof(bak_path), "%s.bak", conf_path) >=
+                (int)sizeof(bak_path))
+            return;
         if (!access(bak_path, F_OK)) {
             remove(conf_path);
             rename(bak_path, conf_path);
@@ -58,7 +64,9 @@ void app_config_restore(void) {
     const char **path = appconf_paths;
     while (*path) {
         char bak_path[PATH_MAX];
-        sprintf(bak_path, "%s.bak", *path);
+        if (snprintf(bak_path, sizeof(bak_path), "%s.bak", *path) >=
+                (int)sizeof(bak_path))
+            return;
         if (!access(bak_path, F_OK)) {
             remove(*path);
             rename(bak_path, *path);
@@ -160,6 +168,10 @@ int app_config_save(void) {
     fprintf(file, "  gop: %d\n", app_config.mp4_gop);
     fprintf(file, "  profile: %d\n", app_config.mp4_profile);
     fprintf(file, "  bitrate: %d\n", app_config.mp4_bitrate);
+    fprintf(file, "  iqp: %d\n", app_config.mp4_iqp);
+    fprintf(file, "  pqp: %d\n", app_config.mp4_pqp);
+    fprintf(file, "  secondary_bitrate: %d\n", app_config.mp4_secondary_bitrate);
+    fprintf(file, "  extra_qp: %d\n", app_config.mp4_extra_qp);
 
     fprintf(file, "osd:\n");
     fprintf(file, "  enable: %s\n", app_config.osd_enable ? "true" : "false");
@@ -257,6 +269,10 @@ enum ConfigError app_config_parse(void) {
     app_config.audio_gain = 0;
     app_config.jpeg_enable = false;
     app_config.mp4_enable = false;
+    app_config.mp4_iqp = 28;
+    app_config.mp4_pqp = 30;
+    app_config.mp4_secondary_bitrate = 512;
+    app_config.mp4_extra_qp = 0;
 
     app_config.mjpeg_enable = false;
     app_config.mjpeg_fps = 15;
@@ -271,10 +287,20 @@ enum ConfigError app_config_parse(void) {
 
     app_config.night_mode_enable = false;
     app_config.ir_sensor_pin = 999;
-    app_config.ir_cut_pin1 = 999;
-    app_config.ir_cut_pin2 = 999;
-    app_config.ir_led_pin = 999;
-    app_config.pin_switch_delay_us = 250;
+    if (plat == HAL_PLATFORM_FH8626) {
+        /* ANJIA AJL33PQ0866 stock board wiring recovered from the board helper:
+         * GPIO18 = DAY/closed IR-cut coil, GPIO60 = NIGHT/open coil,
+         * GPIO25 = IR LED, with a 190 ms bistable-coil pulse. */
+        app_config.ir_cut_pin1 = 18;
+        app_config.ir_cut_pin2 = 60;
+        app_config.ir_led_pin = 25;
+        app_config.pin_switch_delay_us = 190000;
+    } else {
+        app_config.ir_cut_pin1 = 999;
+        app_config.ir_cut_pin2 = 999;
+        app_config.ir_led_pin = 999;
+        app_config.pin_switch_delay_us = 250;
+    }
     app_config.check_interval_s = 10;
     app_config.adc_device[0] = 0;
     app_config.adc_threshold = 128;
@@ -359,7 +385,8 @@ enum ConfigError app_config_parse(void) {
             &ini, "night_mode", "ir_led_pin", 0, PIN_MAX,
             &app_config.ir_led_pin);
         parse_int(
-            &ini, "night_mode", "pin_switch_delay_us", 0, 1000,
+            &ini, "night_mode", "pin_switch_delay_us", 0,
+            plat == HAL_PLATFORM_FH8626 ? 1000000 : 1000,
             &app_config.pin_switch_delay_us);
         parse_param_value(
             &ini, "night_mode", "adc_device", app_config.adc_device);
@@ -375,6 +402,14 @@ enum ConfigError app_config_parse(void) {
     if (err != CONFIG_OK)
         goto RET_ERR;
     parse_int(&ini, "isp", "antiflicker", -1, 60, &app_config.antiflicker);
+    if (plat == HAL_PLATFORM_FH8626) {
+        if (app_config.antiflicker >= 60)
+            app_config.antiflicker = 60;
+        else if (app_config.antiflicker >= 50)
+            app_config.antiflicker = 50;
+        else
+            app_config.antiflicker = 0;
+    }
 
     parse_bool(&ini, "mdns", "enable", &app_config.mdns_enable);
 
@@ -473,11 +508,18 @@ enum ConfigError app_config_parse(void) {
                 app_config.mp4_codecH265 = false;
         }
         {
-            const char *possible_values[] = {"CBR", "VBR", "QP", "ABR", "AVBR"};
-            const int count = sizeof(possible_values) / sizeof(const char *);
+            static const char *const common_values[] =
+                {"CBR", "VBR", "QP", "ABR", "AVBR"};
+            static const char *const fh8626_values[] =
+                {"CBR", "VBR", "QP", "ABR", "AVBR", "CVBR"};
+            const char *const *possible_values =
+                plat == HAL_PLATFORM_FH8626 ? fh8626_values : common_values;
+            const int count = plat == HAL_PLATFORM_FH8626 ?
+                (int)(sizeof(fh8626_values) / sizeof(fh8626_values[0])) :
+                (int)(sizeof(common_values) / sizeof(common_values[0]));
             int val = 0;
             parse_enum(&ini, "mp4", "mode", (void *)&val,
-                possible_values, count, 0);
+                (const char **)possible_values, count, 0);
             app_config.mp4_mode = val;
         }
         err = parse_int(
@@ -511,6 +553,11 @@ enum ConfigError app_config_parse(void) {
             &ini, "mp4", "bitrate", 32, INT_MAX, &app_config.mp4_bitrate);
         if (err != CONFIG_OK)
             goto RET_ERR;
+        parse_int(&ini, "mp4", "iqp", 0, 51, &app_config.mp4_iqp);
+        parse_int(&ini, "mp4", "pqp", 0, 51, &app_config.mp4_pqp);
+        parse_int(&ini, "mp4", "secondary_bitrate", 1, INT_MAX,
+            &app_config.mp4_secondary_bitrate);
+        parse_int(&ini, "mp4", "extra_qp", 0, 51, &app_config.mp4_extra_qp);
     }
 
     err = parse_bool(&ini, "jpeg", "enable", &app_config.jpeg_enable);

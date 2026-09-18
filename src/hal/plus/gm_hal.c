@@ -2,6 +2,8 @@
 
 #include "gm_hal.h"
 
+#include <unistd.h>
+
 gm_lib_impl gm_lib;
 
 hal_chnstate gm_state[GM_VENC_CHN_NUM] = {0};

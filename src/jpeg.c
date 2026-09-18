@@ -1,4 +1,5 @@
 #include "jpeg.h"
+#include "hal/full/fh8626_hal.h"
 
 int jpeg_index;
 bool jpeg_module_init = false;
@@ -6,7 +7,23 @@ bool jpeg_module_init = false;
 pthread_mutex_t jpeg_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int jpeg_init() {  
-    int ret;
+    int ret = EXIT_FAILURE;
+
+    if (plat == HAL_PLATFORM_FH8626) {
+        /* FH8626 exposes one JPEG producer binding.  When MJPEG is active,
+         * snapshots are served from its owned latest-frame cache; opening a
+         * second snapshot slot makes the kernel reject the shared binding. */
+        if (app_config.mjpeg_enable) {
+            jpeg_module_init = true;
+            return EXIT_SUCCESS;
+        }
+        ret = fh8626_jpeg_init(1u, app_config.jpeg_width,
+            app_config.jpeg_height, app_config.jpeg_qfactor,
+            app_config.mp4_fps, 0u, HAL_VIDMODE_QP);
+        if (!ret)
+            jpeg_module_init = true;
+        return ret;
+    }
 
     pthread_mutex_lock(&jpeg_mutex);
 
@@ -22,7 +39,7 @@ int jpeg_init() {
 
     jpeg_index = take_next_free_channel(false);
 
-    if (ret = create_channel(jpeg_index, app_config.jpeg_width, app_config.jpeg_height, 1, 1)) {
+    if ((ret = create_channel(jpeg_index, app_config.jpeg_width, app_config.jpeg_height, 1, 1))) {
         pthread_mutex_unlock(&jpeg_mutex);
         HAL_ERROR("jpeg", "Creating channel %d failed with %#x!\n%s\n", 
             jpeg_index, ret, errstr(ret));
@@ -75,6 +92,13 @@ active:
 void jpeg_deinit() {
     pthread_mutex_lock(&jpeg_mutex);
 
+    if (plat == HAL_PLATFORM_FH8626) {
+        fh8626_jpeg_deinit_mode(1u);
+        jpeg_module_init = false;
+        pthread_mutex_unlock(&jpeg_mutex);
+        return;
+    }
+
     switch (plat) {
 #if defined(__ARM_PCS_VFP)
         case HAL_PLATFORM_I6:  i6_video_destroy(jpeg_index); break;
@@ -113,7 +137,14 @@ int jpeg_get(short width, short height, char quality, char grayscale,
         pthread_mutex_unlock(&jpeg_mutex);
         HAL_ERROR("jpeg", "Module is not enabled!\n");
     }
-    int ret;
+    int ret = EXIT_FAILURE;
+
+    if (plat == HAL_PLATFORM_FH8626) {
+        ret = fh8626_jpeg_get((uint32_t)width, (uint32_t)height,
+            (uint32_t)quality, jpeg);
+        pthread_mutex_unlock(&jpeg_mutex);
+        return ret;
+    }
 
     switch (plat) {
  #if defined(__ARM_PCS_VFP)
@@ -133,6 +164,7 @@ int jpeg_get(short width, short height, char quality, char grayscale,
 #elif defined(__riscv) || defined(__riscv__)
         case HAL_PLATFORM_CVI: ret = cvi_video_snapshot_grab(jpeg_index, jpeg); break;
 #endif
+        default: break;
     }
     if (ret && jpeg->data) { 
         free(jpeg->data);

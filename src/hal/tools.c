@@ -485,6 +485,16 @@ char *split(char **input, char *sep) {
     return (curr);
 }
 
+static int hex_nibble(char value) {
+    if (value >= '0' && value <= '9')
+        return value - '0';
+    if (value >= 'a' && value <= 'f')
+        return value - 'a' + 10;
+    if (value >= 'A' && value <= 'F')
+        return value - 'A' + 10;
+    return -1;
+}
+
 void unescape_uri(char *uri) {
     char *src = uri;
     char *dst = uri;
@@ -493,13 +503,25 @@ void unescape_uri(char *uri) {
         src++;
 
     dst = src;
-    while (*src && !alt_isspace((int)(*src)))
-    {
-        *dst++ = (*src == '+') ? ' ' :
-                 ((*src == '%') && src[1] && src[2]) ?
-                 ((*++src & 0x0F) + 9 * (*src > '9')) * 16 + ((*++src & 0x0F) + 9 * (*src > '9')) :
-                 *src;
-        src++;
+    while (*src && !alt_isspace((int)(*src))) {
+        if (*src == '+') {
+            *dst++ = ' ';
+            src++;
+            continue;
+        }
+
+        if (*src == '%' && src[1] && src[2]) {
+            int high = hex_nibble(src[1]);
+            int low = hex_nibble(src[2]);
+
+            if (high >= 0 && low >= 0) {
+                *dst++ = (char)((high << 4) | low);
+                src += 3;
+                continue;
+            }
+        }
+
+        *dst++ = *src++;
     }
     *dst = '\0';
 }

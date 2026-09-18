@@ -274,8 +274,10 @@ static int rtmp_start_sequence(const char *url) {
     char *slash = strchr(p, '/');
     if (!slash) return -1;
 
-    int host_len = slash - p;
-    strncpy(host, p, host_len);
+    size_t host_len = (size_t)(slash - p);
+    if (!host_len || host_len >= sizeof(host))
+        return -1;
+    memcpy(host, p, host_len);
     host[host_len] = '\0';
 
     char *curr_host = host;
@@ -289,11 +291,16 @@ static int rtmp_start_sequence(const char *url) {
     slash = strchr(p, '/');
     if (!slash) return -1;
 
-    int app_len = slash - p;
-    strncpy(app, p, app_len);
+    size_t app_len = (size_t)(slash - p);
+    if (!app_len || app_len >= sizeof(app))
+        return -1;
+    memcpy(app, p, app_len);
     app[app_len] = '\0';
 
-    strcpy(stream, slash + 1);
+    size_t stream_len = strlen(slash + 1);
+    if (!stream_len || stream_len >= sizeof(stream))
+        return -1;
+    memcpy(stream, slash + 1, stream_len + 1);
 
     struct hostent *he = gethostbyname(curr_host);
     if (!he) return -1;
@@ -320,7 +327,10 @@ static int rtmp_start_sequence(const char *url) {
     }
 
     char tcurl[512];
-    snprintf(tcurl, sizeof(tcurl), "rtmp://%s:%d/%s", curr_host, port, app);
+    int tcurl_len = snprintf(tcurl, sizeof(tcurl),
+        "rtmp://%s:%d/%s", curr_host, port, app);
+    if (tcurl_len < 0 || tcurl_len >= (int)sizeof(tcurl))
+        return -1;
 
     if (rtmp_connect(app, tcurl) < 0) return -1;
     if (rtmp_create_stream() < 0) return -1;
