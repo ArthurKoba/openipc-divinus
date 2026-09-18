@@ -329,16 +329,16 @@ int fh8626_request_idr(void)
 }
 
 int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
-    uint32_t quality, uint32_t fps, uint32_t bitrate)
+    uint32_t quality, uint32_t fps, uint32_t bitrate, uint32_t rc_mode)
 {
 #ifdef FH8626_NATIVE_KERNEL
     if (!kernel_context)
         return -ENODEV;
     return fh8626_kernel_jpeg_init(kernel_context, mode, width, height,
-        quality, fps, bitrate);
+        quality, fps, bitrate, rc_mode);
 #else
     (void)mode; (void)width; (void)height; (void)quality;
-    (void)fps; (void)bitrate;
+    (void)fps; (void)bitrate; (void)rc_mode;
     return -ENOTSUP;
 #endif
 }

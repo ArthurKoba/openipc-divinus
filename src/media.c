@@ -645,7 +645,8 @@ int media_mjpeg_enable(void) {
     if (plat == HAL_PLATFORM_FH8626) {
         int native_ret = fh8626_jpeg_init(2u, app_config.mjpeg_width,
             app_config.mjpeg_height, app_config.mjpeg_qfactor,
-            app_config.mjpeg_fps, app_config.mjpeg_bitrate);
+            app_config.mjpeg_fps, app_config.mjpeg_bitrate,
+            app_config.mjpeg_mode);
         if (native_ret)
             return native_ret;
         fh8626_state[1].enable = 1;

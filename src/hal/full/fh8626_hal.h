@@ -27,7 +27,7 @@ int fh8626_sdk_stop(void);
 int fh8626_native_active(void);
 int fh8626_request_idr(void);
 int fh8626_jpeg_init(uint32_t mode, uint32_t width, uint32_t height,
-    uint32_t quality, uint32_t fps, uint32_t bitrate);
+    uint32_t quality, uint32_t fps, uint32_t bitrate, uint32_t rc_mode);
 void fh8626_jpeg_deinit(void);
 void fh8626_jpeg_deinit_mode(uint32_t mode);
 int fh8626_jpeg_get(uint32_t width, uint32_t height, uint32_t quality,

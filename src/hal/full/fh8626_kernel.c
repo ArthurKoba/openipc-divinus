@@ -1311,11 +1311,12 @@ static void *kernel_mjpeg_thread(void *opaque)
 
 int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
     uint32_t width, uint32_t height, uint32_t quality, uint32_t fps,
-    uint32_t bitrate)
+    uint32_t bitrate, uint32_t rc_mode)
 {
     uint32_t query[4] = {mode, width, height, 0u};
     uint32_t init[6];
     struct fh_jpeg_cfg_wire mjpeg_cfg;
+    struct fh_jpeg_drop_wire drop_cfg;
     uint32_t snapshot_cfg[4];
     int index, rc;
 
@@ -1377,20 +1378,47 @@ int fh8626_kernel_jpeg_init(struct fh8626_kernel *k, uint32_t mode,
         mjpeg_cfg.height = height;
         mjpeg_cfg.src_fps_packed = fh8626_fps_packed(k->config.fps);
         mjpeg_cfg.dst_fps_packed = fh8626_fps_packed(fps);
-        /* Divinus QP mode is the fully recovered path: rc_selector 0. */
-        mjpeg_cfg.rc_selector = 0u;
         mjpeg_cfg.qp = quality;
+        if (bitrate > UINT32_MAX / 1000u) {
+            rc = -ERANGE;
+            goto fail_mem;
+        }
         mjpeg_cfg.target_rate = bitrate * 1000u;
         mjpeg_cfg.min_qp = 0u;
         mjpeg_cfg.max_qp = FH_JPEG_QP_MAX;
-        mjpeg_cfg.rate_selector = 0u;
-        mjpeg_cfg.secondary_rate = 0u;
         mjpeg_cfg.rotation = 0u;
+
+        switch (rc_mode) {
+        case HAL_VIDMODE_QP:
+            mjpeg_cfg.rc_selector = 0u;
+            break;
+        case HAL_VIDMODE_VBR:
+        case HAL_VIDMODE_CBR:
+            /*
+             * jpeg.ko exposes one adaptive-QP controller; rc_selector is
+             * boolean at the kernel boundary. Divinus differentiates CBR from
+             * VBR with the separately recovered frame/drop controller below.
+             */
+            mjpeg_cfg.rc_selector = 1u;
+            break;
+        default:
+            rc = -ENOTSUP;
+            goto fail_mem;
+        }
+
         if (fh_jpeg_cfg_validate_sdk(&mjpeg_cfg)) {
             rc = -EINVAL;
             goto fail_mem;
         }
         rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_MJPEG_SET_CFG, &mjpeg_cfg);
+        if (!rc && rc_mode == HAL_VIDMODE_CBR) {
+            rc = fh_jpeg_drop_build_safe(&drop_cfg,
+                mjpeg_cfg.src_fps_packed, mjpeg_cfg.dst_fps_packed,
+                quality, mjpeg_cfg.dst_fps_packed,
+                120u, mjpeg_cfg.dst_fps_packed);
+            if (!rc)
+                rc = call_ioctl(k->jpeg_fd, FH_JPEG_SET_DROP_CFG, &drop_cfg);
+        }
         if (!rc)
             rc = call_ioctl(k->jpeg_fd, FH8626_JPEG_START, NULL);
     }

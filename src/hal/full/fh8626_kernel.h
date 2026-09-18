@@ -32,7 +32,7 @@ int fh8626_kernel_request_idr(struct fh8626_kernel *kernel);
  * addresses directly to /dev/jpeg. */
 int fh8626_kernel_jpeg_init(struct fh8626_kernel *kernel, uint32_t mode,
     uint32_t width, uint32_t height, uint32_t quality, uint32_t fps,
-    uint32_t bitrate);
+    uint32_t bitrate, uint32_t rc_mode);
 int fh8626_kernel_jpeg_deinit_mode(struct fh8626_kernel *kernel, uint32_t mode);
 int fh8626_kernel_jpeg_deinit(struct fh8626_kernel *kernel);
 int fh8626_kernel_jpeg_get(struct fh8626_kernel *kernel, uint32_t width,

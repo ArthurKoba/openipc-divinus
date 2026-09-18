@@ -19,7 +19,7 @@ int jpeg_init() {
         }
         ret = fh8626_jpeg_init(1u, app_config.jpeg_width,
             app_config.jpeg_height, app_config.jpeg_qfactor,
-            app_config.mp4_fps, 0u);
+            app_config.mp4_fps, 0u, HAL_VIDMODE_QP);
         if (!ret)
             jpeg_module_init = true;
         return ret;
